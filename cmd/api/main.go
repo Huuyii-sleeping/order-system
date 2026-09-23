@@ -10,11 +10,22 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"example.com/order-system/internal/config"
 )
 
 func main() {
-
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// 配置必须在服务启动前加载并校验。
+	//
+	// 如果配置不合法，服务不应该继续监听端口，
+	// 否则可能出现“服务看起来启动了，但行为不正确”的情况。
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("load config failed", "error", err)
+		os.Exit(1)
+	}
 
 	// ServerMux 是Go标准库提供的HTTP路由器
 	mux := http.NewServeMux()
@@ -32,7 +43,7 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    cfg.HTTPAddr,
 		Handler: mux,
 
 		// 限制发送完整请求头的时间
@@ -55,7 +66,7 @@ func main() {
 	go func() {
 		logger.Info(
 			"http server starting",
-			"service", "order-system",
+			"service", cfg.AppName,
 			"address", server.Addr,
 		)
 
@@ -77,14 +88,14 @@ func main() {
 
 		shutdownContext, cancel := context.WithTimeout(
 			context.Background(),
-			10*time.Second,
+			cfg.ShutdownTimeout,
 		)
 
 		defer cancel()
 
 		logger.Info(
 			"http server shutting down",
-			"timeout", 10*time.Second,
+			"timeout", cfg.ShutdownTimeout,
 		)
 
 		if err := server.Shutdown(shutdownContext); err != nil {
