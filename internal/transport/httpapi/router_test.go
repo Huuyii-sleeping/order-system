@@ -21,6 +21,10 @@ func TestHealthRoute(t *testing.T) {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
 	}
 
+	if got := response.Header().Get(httpapi.RequestIDHeader); got == "" {
+		t.Error("response request ID is empty")
+	}
+
 	if got := response.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", got, "application/json")
 	}
@@ -32,6 +36,66 @@ func TestHealthRoute(t *testing.T) {
 
 	if got := body["status"]; got != "ok" {
 		t.Errorf("response status = %q, want %q", got, "ok")
+	}
+}
+
+func TestRequestIDPreservesClientValue(t *testing.T) {
+	const clientRequestID = "client-request-123"
+
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set(httpapi.RequestIDHeader, clientRequestID)
+	response := httptest.NewRecorder()
+
+	var handlerRequestID string
+	handler := httpapi.WithRequestID(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		handlerRequestID = httpapi.RequestID(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	handler.ServeHTTP(response, request)
+
+	if got := response.Header().Get(httpapi.RequestIDHeader); got != clientRequestID {
+		t.Errorf("response request ID = %q, want %q", got, clientRequestID)
+	}
+
+	if handlerRequestID != clientRequestID {
+		t.Errorf("handler request ID = %q, want %q", handlerRequestID, clientRequestID)
+	}
+}
+
+func TestRequestIDGeneratesWhenClientValueIsMissing(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+
+	var handlerRequestID string
+	handler := httpapi.WithRequestID(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		handlerRequestID = httpapi.RequestID(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	handler.ServeHTTP(response, request)
+
+	responseRequestID := response.Header().Get(httpapi.RequestIDHeader)
+	if responseRequestID == "" {
+		t.Fatal("generated response request ID is empty")
+	}
+
+	if len(responseRequestID) != 32 {
+		t.Errorf("generated request ID length = %d, want 32", len(responseRequestID))
+	}
+
+	if handlerRequestID != responseRequestID {
+		t.Errorf(
+			"handler request ID = %q, response request ID = %q",
+			handlerRequestID,
+			responseRequestID,
+		)
 	}
 }
 
