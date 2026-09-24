@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"example.com/order-system/internal/config"
+	"example.com/order-system/internal/transport/httpapi"
 )
 
 func main() {
@@ -27,24 +27,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ServerMux 是Go标准库提供的HTTP路由器
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(
-			"Content-Type", "application/json",
-		)
-
-		w.WriteHeader(http.StatusOK)
-
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status": "ok",
-		})
-	})
+	// main 只负责组装 HTTP Handler，不关心具体有哪些路由。
+	// 路由和协议响应都由 transport/httpapi 包维护。
+	router := httpapi.NewRouter()
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: mux,
+		Handler: router,
 
 		// 限制发送完整请求头的时间
 		ReadHeaderTimeout: 5 * time.Second,
