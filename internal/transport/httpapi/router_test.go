@@ -21,10 +21,6 @@ func TestHealthRoute(t *testing.T) {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
 	}
 
-	if got := response.Header().Get(httpapi.RequestIDHeader); got == "" {
-		t.Error("response request ID is empty")
-	}
-
 	if got := response.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", got, "application/json")
 	}
@@ -103,7 +99,7 @@ func TestHealthRouteRejectsUnsupportedMethod(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/healthz", nil)
 	response := httptest.NewRecorder()
 
-	httpapi.NewRouter().ServeHTTP(response, request)
+	httpapi.WithRequestID(httpapi.NewRouter()).ServeHTTP(response, request)
 
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf(
@@ -124,7 +120,7 @@ func TestRouterReturnsNotFoundForUnknownPath(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/unknown", nil)
 	response := httptest.NewRecorder()
 
-	httpapi.NewRouter().ServeHTTP(response, request)
+	httpapi.WithRequestID(httpapi.NewRouter()).ServeHTTP(response, request)
 
 	if response.Code != http.StatusNotFound {
 		t.Fatalf(

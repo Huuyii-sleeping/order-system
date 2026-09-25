@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -54,6 +55,78 @@ func WithRequestID(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// WithAccessLog 记录每个 HTTP 请求的访问日志。
+//
+// 访问日志属于横切能力，因此它不应该由每个业务 Handler 单独实现。
+// 通过包装下一个 Handler，可以统一记录所有路由的请求信息。
+func WithAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w}
+
+		// 先让后续中间件和路由处理请求。
+		// statusRecorder 会在这里记录最终状态码和响应大小。
+		next.ServeHTTP(recorder, r)
+
+		statusCode := recorder.statusCode
+		if statusCode == 0 {
+			// Handler 没有写入响应时，HTTP 默认状态码是 200。
+			statusCode = http.StatusOK
+		}
+
+		logger.Info(
+			"http request",
+			"request_id", RequestID(r.Context()),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", statusCode,
+			"bytes", recorder.bytesWritten,
+			"duration", time.Since(startedAt),
+		)
+	})
+}
+
+// statusRecorder 记录下游 Handler 写入的状态码和响应大小。
+//
+// http.ResponseWriter 本身不会暴露“最终状态码”和“写了多少字节”，
+// 所以访问日志需要用装饰器包住它。
+type statusRecorder struct {
+	http.ResponseWriter
+
+	statusCode   int
+	bytesWritten int
+}
+
+// WriteHeader 记录并发送响应状态码。
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	// HTTP 响应头只能发送一次，后续重复调用不应覆盖第一次状态码。
+	if r.statusCode != 0 {
+		return
+	}
+
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Write 记录响应 body 的字节数。
+func (r *statusRecorder) Write(body []byte) (int, error) {
+	if r.statusCode == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+
+	n, err := r.ResponseWriter.Write(body)
+	r.bytesWritten += n
+
+	return n, err
+}
+
+// Unwrap 让 http.ResponseController 能访问底层 ResponseWriter。
+//
+// 这为后续需要 Flush 或 Hijack 的 Handler 保留扩展能力。
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 // RequestID 从 Context 中读取请求 ID。

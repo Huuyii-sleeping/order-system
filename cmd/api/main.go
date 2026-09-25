@@ -27,13 +27,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// main 只负责组装 HTTP Handler，不关心具体有哪些路由。
-	// 路由和协议响应都由 transport/httpapi 包维护。
+	// main 负责组装 HTTP Handler，不关心具体有哪些路由。
+	// 路由和协议响应由 transport/httpapi 包维护。
 	router := httpapi.NewRouter()
+
+	// 中间件从内向外组合：
+	//
+	// router
+	//   ← access log
+	//       ← request ID
+	//
+	// Request ID 放在最外层，确保 Access Log 读取到已经写入 Context
+	// 的请求 ID。
+	handler := httpapi.WithRequestID(
+		httpapi.WithAccessLog(logger, router),
+	)
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: router,
+		Handler: handler,
 
 		// 限制发送完整请求头的时间
 		ReadHeaderTimeout: 5 * time.Second,

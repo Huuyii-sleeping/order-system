@@ -21,9 +21,11 @@ func NewRouter() http.Handler {
 	// 因此 POST /healthz 会由标准库自动返回 405 Method Not Allowed。
 	mux.HandleFunc("GET /healthz", healthHandler)
 
-	// Request ID 属于所有 API 请求都需要的横切能力，
-	// 因此在返回 Router 前统一包一层。
-	return WithRequestID(mux)
+	// 返回原始路由器。
+	//
+	// Request ID、访问日志等横切能力由应用组装层统一包装，
+	// 这样中间件顺序会在一个地方清晰可见。
+	return mux
 }
 
 // healthHandler 只表示当前进程是否存活并能处理 HTTP 请求。
