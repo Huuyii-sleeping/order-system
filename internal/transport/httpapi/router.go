@@ -5,21 +5,37 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+
+	"example.com/order-system/internal/domain/catalog"
 )
+
+// CatalogQueries 是 HTTP 商品接口需要的应用能力。
+//
+// 接口定义在消费方 httpapi 中，便于测试时替换实现，
+// 同时避免 HTTP 层依赖具体的应用 Service 类型。
+type CatalogQueries interface {
+	ListProducts(context.Context) ([]catalog.Product, error)
+	GetProduct(context.Context, string) (catalog.Product, error)
+}
 
 // NewRouter 创建 API 使用的 HTTP 路由。
 //
 // 返回 http.Handler 而不是具体的 *http.ServeMux，
 // 可以让调用方只依赖标准接口。以后在路由外包装中间件时，
 // main.go 也不需要改变接收类型。
-func NewRouter() http.Handler {
+func NewRouter(catalogQueries CatalogQueries) http.Handler {
 	mux := http.NewServeMux()
 
 	// Go 1.22 之后可以在路由模式中同时声明 Method 和 Path。
 	// 因此 POST /healthz 会由标准库自动返回 405 Method Not Allowed。
 	mux.HandleFunc("GET /healthz", healthHandler)
+
+	catalogHandler := newCatalogHandler(catalogQueries)
+	mux.HandleFunc("GET /products", catalogHandler.list)
+	mux.HandleFunc("GET /products/{productID}", catalogHandler.getByID)
 
 	// 返回原始路由器。
 	//

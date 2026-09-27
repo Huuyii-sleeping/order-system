@@ -10,7 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"example.com/order-system/internal/adapters/memory"
+	catalogapp "example.com/order-system/internal/application/catalog"
 	"example.com/order-system/internal/config"
+	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/transport/httpapi"
 )
 
@@ -27,9 +30,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// main 负责组装 HTTP Handler，不关心具体有哪些路由。
-	// 路由和协议响应由 transport/httpapi 包维护。
-	router := httpapi.NewRouter()
+	// main 是应用的组合根：具体的内存 Repository 在这里创建，
+	// 再注入只依赖接口的应用 Service，最后交给 HTTP 层使用。
+	products, err := seedProducts()
+	if err != nil {
+		logger.Error("seed products failed", "error", err)
+		os.Exit(1)
+	}
+
+	catalogRepository := memory.NewCatalogRepository(products)
+	catalogService := catalogapp.NewService(catalogRepository)
+	router := httpapi.NewRouter(catalogService)
 
 	// 中间件从内向外组合：
 	//
@@ -122,4 +133,33 @@ func main() {
 
 		logger.Info("http server stopped")
 	}
+}
+
+// seedProducts 提供本地学习阶段使用的初始商品。
+// 后续接入 PostgreSQL 后，这部分数据会改为数据库迁移或种子数据。
+func seedProducts() ([]catalog.Product, error) {
+	definitions := []struct {
+		id         string
+		name       string
+		priceCents int64
+	}{
+		{id: "product-1", name: "Mechanical Keyboard", priceCents: 12900},
+		{id: "product-2", name: "Wireless Mouse", priceCents: 6900},
+	}
+
+	products := make([]catalog.Product, 0, len(definitions))
+	for _, definition := range definitions {
+		product, err := catalog.NewProduct(
+			definition.id,
+			definition.name,
+			definition.priceCents,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		products = append(products, product)
+	}
+
+	return products, nil
 }
