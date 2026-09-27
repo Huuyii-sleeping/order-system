@@ -34,13 +34,18 @@ func main() {
 	// 中间件从内向外组合：
 	//
 	// router
-	//   ← access log
-	//       ← request ID
+	//   ← recovery
+	//       ← access log
+	//           ← request ID
 	//
-	// Request ID 放在最外层，确保 Access Log 读取到已经写入 Context
-	// 的请求 ID。
+	// Request ID 放在最外层，让后续日志都能关联请求。
+	// Access Log 放在 Recovery 外层，让 panic 被转换成 500 后，
+	// 仍能记录正确的状态码和响应大小。
 	handler := httpapi.WithRequestID(
-		httpapi.WithAccessLog(logger, router),
+		httpapi.WithAccessLog(
+			logger,
+			httpapi.WithRecovery(logger, router),
+		),
 	)
 
 	server := &http.Server{
