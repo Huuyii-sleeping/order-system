@@ -10,10 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"example.com/order-system/internal/adapters/clock"
+	"example.com/order-system/internal/adapters/idgenerator"
 	"example.com/order-system/internal/adapters/memory"
 	catalogapp "example.com/order-system/internal/application/catalog"
+	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/config"
 	"example.com/order-system/internal/domain/catalog"
+	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/transport/httpapi"
 )
 
@@ -40,7 +44,26 @@ func main() {
 
 	catalogRepository := memory.NewCatalogRepository(products)
 	catalogService := catalogapp.NewService(catalogRepository)
-	router := httpapi.NewRouter(catalogService)
+
+	stocks, err := seedStocks()
+	if err != nil {
+		logger.Error("seed stocks failed", "error", err)
+		os.Exit(1)
+	}
+
+	orderStore, err := memory.NewOrderStore(stocks)
+	if err != nil {
+		logger.Error("create order store failed", "error", err)
+		os.Exit(1)
+	}
+
+	orderService := orderapp.NewService(
+		catalogRepository,
+		orderStore,
+		idgenerator.Random{},
+		clock.System{},
+	)
+	router := httpapi.NewRouter(catalogService, orderService)
 
 	// 中间件从内向外组合：
 	//
@@ -162,4 +185,26 @@ func seedProducts() ([]catalog.Product, error) {
 	}
 
 	return products, nil
+}
+
+func seedStocks() ([]inventory.Stock, error) {
+	definitions := []struct {
+		productID string
+		available int
+	}{
+		{productID: "product-1", available: 10},
+		{productID: "product-2", available: 20},
+	}
+
+	stocks := make([]inventory.Stock, 0, len(definitions))
+	for _, definition := range definitions {
+		stock, err := inventory.NewStock(definition.productID, definition.available)
+		if err != nil {
+			return nil, err
+		}
+
+		stocks = append(stocks, stock)
+	}
+
+	return stocks, nil
 }
