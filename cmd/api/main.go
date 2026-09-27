@@ -10,14 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"example.com/order-system/internal/adapters/clock"
-	"example.com/order-system/internal/adapters/idgenerator"
-	"example.com/order-system/internal/adapters/memory"
-	catalogapp "example.com/order-system/internal/application/catalog"
-	orderapp "example.com/order-system/internal/application/order"
+	"example.com/order-system/internal/app"
 	"example.com/order-system/internal/config"
-	"example.com/order-system/internal/domain/catalog"
-	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/transport/httpapi"
 )
 
@@ -34,36 +28,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// main 是应用的组合根：具体的内存 Repository 在这里创建，
-	// 再注入只依赖接口的应用 Service，最后交给 HTTP 层使用。
-	products, err := seedProducts()
+	// main 是组合根：根据配置创建内存或 PostgreSQL 适配器，
+	// 再把应用服务注入 HTTP 层。
+	startupContext, cancelStartup := context.WithTimeout(context.Background(), 10*time.Second)
+	services, err := app.NewServices(startupContext, cfg)
+	cancelStartup()
 	if err != nil {
-		logger.Error("seed products failed", "error", err)
+		logger.Error("initialize services failed", "error", err)
 		os.Exit(1)
 	}
+	defer services.Close()
 
-	catalogRepository := memory.NewCatalogRepository(products)
-	catalogService := catalogapp.NewService(catalogRepository)
-
-	stocks, err := seedStocks()
-	if err != nil {
-		logger.Error("seed stocks failed", "error", err)
-		os.Exit(1)
-	}
-
-	orderStore, err := memory.NewOrderStore(stocks)
-	if err != nil {
-		logger.Error("create order store failed", "error", err)
-		os.Exit(1)
-	}
-
-	orderService := orderapp.NewService(
-		catalogRepository,
-		orderStore,
-		idgenerator.Random{},
-		clock.System{},
-	)
-	router := httpapi.NewRouter(catalogService, orderService)
+	router := httpapi.NewRouter(services.Catalog, services.Orders)
 
 	// 中间件从内向外组合：
 	//
@@ -156,55 +132,4 @@ func main() {
 
 		logger.Info("http server stopped")
 	}
-}
-
-// seedProducts 提供本地学习阶段使用的初始商品。
-// 后续接入 PostgreSQL 后，这部分数据会改为数据库迁移或种子数据。
-func seedProducts() ([]catalog.Product, error) {
-	definitions := []struct {
-		id         string
-		name       string
-		priceCents int64
-	}{
-		{id: "product-1", name: "Mechanical Keyboard", priceCents: 12900},
-		{id: "product-2", name: "Wireless Mouse", priceCents: 6900},
-	}
-
-	products := make([]catalog.Product, 0, len(definitions))
-	for _, definition := range definitions {
-		product, err := catalog.NewProduct(
-			definition.id,
-			definition.name,
-			definition.priceCents,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		products = append(products, product)
-	}
-
-	return products, nil
-}
-
-func seedStocks() ([]inventory.Stock, error) {
-	definitions := []struct {
-		productID string
-		available int
-	}{
-		{productID: "product-1", available: 10},
-		{productID: "product-2", available: 20},
-	}
-
-	stocks := make([]inventory.Stock, 0, len(definitions))
-	for _, definition := range definitions {
-		stock, err := inventory.NewStock(definition.productID, definition.available)
-		if err != nil {
-			return nil, err
-		}
-
-		stocks = append(stocks, stock)
-	}
-
-	return stocks, nil
 }

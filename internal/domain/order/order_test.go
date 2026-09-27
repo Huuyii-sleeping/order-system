@@ -59,3 +59,58 @@ func TestNewOrderRejectsInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoreOrder(t *testing.T) {
+	createdAt := time.Date(2026, 9, 27, 8, 0, 0, 0, time.UTC)
+	restored, err := order.Restore(
+		"order-1",
+		"customer-1",
+		"product-1",
+		2,
+		12900,
+		25800,
+		order.StatusConfirmed,
+		"key-1",
+		createdAt,
+	)
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if restored.Status() != order.StatusConfirmed || restored.TotalCents() != 25800 {
+		t.Fatalf("restored order = %+v", restored)
+	}
+}
+
+func TestRestoreOrderRejectsCorruptPersistenceData(t *testing.T) {
+	_, err := order.Restore(
+		"order-1",
+		"customer-1",
+		"product-1",
+		2,
+		12900,
+		1,
+		order.StatusPending,
+		"key-1",
+		time.Now(),
+	)
+	if !errors.Is(err, order.ErrInvalidTotal) {
+		t.Fatalf("Restore() error = %v, want invalid total", err)
+	}
+}
+
+func TestRestoreOrderRejectsInvalidStatus(t *testing.T) {
+	_, err := order.Restore(
+		"order-1",
+		"customer-1",
+		"product-1",
+		2,
+		12900,
+		25800,
+		order.Status("unknown"),
+		"key-1",
+		time.Now(),
+	)
+	if !errors.Is(err, order.ErrInvalidStatus) {
+		t.Fatalf("Restore() error = %v, want invalid status", err)
+	}
+}

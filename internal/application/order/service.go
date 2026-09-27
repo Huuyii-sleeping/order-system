@@ -75,6 +75,7 @@ func (s *Service) CreateOrder(ctx context.Context, command CreateOrderCommand) (
 		return CreateOrderResult{}, err
 	}
 
+	// 外部查询放在事务之前，避免数据库事务持锁期间等待外部服务。
 	product, err := s.products.GetByID(ctx, command.ProductID)
 	if err != nil {
 		return CreateOrderResult{}, fmt.Errorf("get product %q: %w", command.ProductID, err)

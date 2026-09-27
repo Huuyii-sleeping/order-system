@@ -16,11 +16,13 @@ func TestLoad(t *testing.T) {
 	tests := []struct {
 		name string
 
-		// 每个测试场景会把这三个值写入环境变量。
+		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
 		appName         string
 		httpAddr        string
 		shutdownTimeout string
+		storageDriver   string
+		databaseURL     string
 
 		want              config.Config
 		wantErrorContains string
@@ -34,6 +36,7 @@ func TestLoad(t *testing.T) {
 				AppName:         "order-system",
 				HTTPAddr:        ":8080",
 				ShutdownTimeout: 10 * time.Second,
+				StorageDriver:   config.StorageMemory,
 			},
 		},
 		{
@@ -41,10 +44,14 @@ func TestLoad(t *testing.T) {
 			appName:         "checkout-service",
 			httpAddr:        ":9090",
 			shutdownTimeout: "30s",
+			storageDriver:   config.StoragePostgres,
+			databaseURL:     "postgres://localhost/order_system",
 			want: config.Config{
 				AppName:         "checkout-service",
 				HTTPAddr:        ":9090",
 				ShutdownTimeout: 30 * time.Second,
+				StorageDriver:   config.StoragePostgres,
+				DatabaseURL:     "postgres://localhost/order_system",
 			},
 		},
 		{
@@ -62,6 +69,16 @@ func TestLoad(t *testing.T) {
 			shutdownTimeout:   "-5s",
 			wantErrorContains: "must be greater than zero",
 		},
+		{
+			name:              "rejects unsupported storage driver",
+			storageDriver:     "mongodb",
+			wantErrorContains: "unsupported STORAGE_DRIVER",
+		},
+		{
+			name:              "postgres requires database URL",
+			storageDriver:     config.StoragePostgres,
+			wantErrorContains: "DATABASE_URL is required",
+		},
 	}
 
 	for _, tt := range tests {
@@ -71,6 +88,8 @@ func TestLoad(t *testing.T) {
 			t.Setenv("APP_NAME", tt.appName)
 			t.Setenv("HTTP_ADDR", tt.httpAddr)
 			t.Setenv("SHUTDOWN_TIMEOUT", tt.shutdownTimeout)
+			t.Setenv("STORAGE_DRIVER", tt.storageDriver)
+			t.Setenv("DATABASE_URL", tt.databaseURL)
 
 			got, err := config.Load()
 

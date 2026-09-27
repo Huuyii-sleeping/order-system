@@ -3,7 +3,13 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
+)
+
+const (
+	StorageMemory   = "memory"
+	StoragePostgres = "postgres"
 )
 
 type Config struct {
@@ -12,6 +18,9 @@ type Config struct {
 	HTTPAddr string
 
 	ShutdownTimeout time.Duration
+
+	StorageDriver string
+	DatabaseURL   string
 }
 
 func Load() (Config, error) {
@@ -19,6 +28,18 @@ func Load() (Config, error) {
 		AppName:         envOrDefault("APP_NAME", "order-system"),
 		HTTPAddr:        envOrDefault("HTTP_ADDR", ":8080"),
 		ShutdownTimeout: 10 * time.Second,
+		StorageDriver:   strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
+		DatabaseURL:     os.Getenv("DATABASE_URL"),
+	}
+
+	switch cfg.StorageDriver {
+	case StorageMemory:
+	case StoragePostgres:
+		if strings.TrimSpace(cfg.DatabaseURL) == "" {
+			return Config{}, fmt.Errorf("DATABASE_URL is required when STORAGE_DRIVER is %q", StoragePostgres)
+		}
+	default:
+		return Config{}, fmt.Errorf("unsupported STORAGE_DRIVER %q", cfg.StorageDriver)
 	}
 
 	rawShutdownTimeout := os.Getenv("SHUTDOWN_TIMEOUT")
