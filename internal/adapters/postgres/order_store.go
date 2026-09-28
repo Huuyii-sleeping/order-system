@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	idempotencyKeyConstraint  = "orders_idempotency_key_unique"
+	idempotencyKeyConstraint  = "orders_customer_idempotency_key_unique"
 	orderPrimaryKeyConstraint = "orders_pkey"
 )
 
@@ -47,8 +47,16 @@ func (s *OrderStore) Transact(ctx context.Context, fn func(orderapp.Transaction)
 	return nil
 }
 
-func (s *OrderStore) GetOrderByID(ctx context.Context, orderID string) (order.Order, error) {
-	got, err := scanOrder(s.db.QueryRowContext(ctx, orderSelect+` WHERE id = $1`, orderID))
+func (s *OrderStore) GetOrderByIDAndCustomerID(
+	ctx context.Context,
+	orderID, customerID string,
+) (order.Order, error) {
+	got, err := scanOrder(s.db.QueryRowContext(
+		ctx,
+		orderSelect+` WHERE id = $1 AND customer_id = $2`,
+		orderID,
+		customerID,
+	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return order.Order{}, order.ErrOrderNotFound
 	}
@@ -64,19 +72,21 @@ type orderTransaction struct {
 	tx  *sql.Tx
 }
 
-func (tx *orderTransaction) GetOrderByIdempotencyKey(key string) (order.Order, error) {
+func (tx *orderTransaction) GetOrderByIdempotencyKey(customerID, key string) (order.Order, error) {
 	// 相同幂等键在所有服务实例间串行执行。事务结束时 PostgreSQL
 	// 自动释放 advisory lock，不需要显式解锁。
 	if _, err := tx.tx.ExecContext(tx.ctx, `
-		SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
-	`, key); err != nil {
+		SELECT pg_advisory_xact_lock(
+			hashtextextended($2, hashtextextended($1, 0))
+		)
+	`, customerID, key); err != nil {
 		return order.Order{}, fmt.Errorf("lock idempotency key: %w", err)
 	}
 
 	got, err := scanOrder(tx.tx.QueryRowContext(
 		tx.ctx,
-		orderSelect+` WHERE idempotency_key = $1`,
-		key,
+		orderSelect+` WHERE customer_id = $1 AND idempotency_key = $2`,
+		customerID, key,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return order.Order{}, order.ErrOrderNotFound

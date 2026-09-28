@@ -9,7 +9,10 @@ import (
 	"example.com/order-system/internal/adapters/clock"
 	"example.com/order-system/internal/adapters/idgenerator"
 	"example.com/order-system/internal/adapters/memory"
+	"example.com/order-system/internal/adapters/password"
 	"example.com/order-system/internal/adapters/postgres"
+	"example.com/order-system/internal/adapters/sessiontoken"
+	authapp "example.com/order-system/internal/application/auth"
 	catalogapp "example.com/order-system/internal/application/catalog"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/config"
@@ -19,6 +22,7 @@ import (
 
 type Services struct {
 	Catalog *catalogapp.Service
+	Auth    *authapp.Service
 	Orders  *orderapp.Service
 
 	closer io.Closer
@@ -26,6 +30,7 @@ type Services struct {
 
 func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	var products catalogapp.Repository
+	var identities authapp.Store
 	var orders orderapp.Store
 	var closer io.Closer
 
@@ -41,6 +46,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		}
 
 		products = memory.NewCatalogRepository(seededProducts)
+		identities = memory.NewIdentityStore()
 		orders, err = memory.NewOrderStore(seededStocks)
 		if err != nil {
 			return nil, fmt.Errorf("create memory order store: %w", err)
@@ -53,6 +59,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		}
 		closer = db
 		products = postgres.NewCatalogRepository(db)
+		identities = postgres.NewIdentityStore(db)
 		orders = postgres.NewOrderStore(db)
 
 	default:
@@ -61,6 +68,14 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 
 	return &Services{
 		Catalog: catalogapp.NewService(products),
+		Auth: authapp.NewService(
+			identities,
+			password.NewBcrypt(cfg.BcryptCost),
+			idgenerator.Random{},
+			sessiontoken.Random{},
+			clock.System{},
+			cfg.SessionTTL,
+		),
 		Orders: orderapp.NewService(
 			products,
 			orders,

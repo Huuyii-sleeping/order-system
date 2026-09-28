@@ -15,6 +15,7 @@ import (
 	"example.com/order-system/internal/adapters/postgres"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/domain/inventory"
+	"example.com/order-system/internal/domain/order"
 	"example.com/order-system/migrations"
 )
 
@@ -64,6 +65,13 @@ func TestIntegrationPostgresTransactionConcurrencyAndIdempotency(t *testing.T) {
 	if err := postgres.Migrate(ctx, db, migrations.Files); err != nil {
 		t.Fatalf("second Migrate() error = %v", err)
 	}
+	seedIntegrationUsers(
+		t, db,
+		"oversell-customer",
+		"idempotent-customer",
+		"scoped-customer-a",
+		"scoped-customer-b",
+	)
 
 	t.Run("rolls back stock change when transaction fails", func(t *testing.T) {
 		store := postgres.NewOrderStore(db)
@@ -188,6 +196,32 @@ func TestIntegrationPostgresTransactionConcurrencyAndIdempotency(t *testing.T) {
 			t.Errorf("available = %d, want 18", got)
 		}
 	})
+
+	t.Run("scopes idempotency and reads to customer", func(t *testing.T) {
+		services := []*orderapp.Service{
+			newPostgresOrderService(db, &sequenceIDGenerator{prefix: "scoped-a"}),
+			newPostgresOrderService(peerDB, &sequenceIDGenerator{prefix: "scoped-b"}),
+		}
+		customers := []string{"scoped-customer-a", "scoped-customer-b"}
+		orders := make([]string, len(services))
+		for index, service := range services {
+			result, err := service.CreateOrder(ctx, orderapp.CreateOrderCommand{
+				CustomerID: customers[index], ProductID: "product-2",
+				Quantity: 1, IdempotencyKey: "same-key-for-each-customer",
+			})
+			if err != nil {
+				t.Fatalf("CreateOrder(%s) error = %v", customers[index], err)
+			}
+			orders[index] = result.Order.ID()
+		}
+
+		if _, err := services[0].GetOrder(ctx, customers[0], orders[0]); err != nil {
+			t.Fatalf("owner GetOrder() error = %v", err)
+		}
+		if _, err := services[1].GetOrder(ctx, customers[1], orders[0]); !errors.Is(err, order.ErrOrderNotFound) {
+			t.Fatalf("cross-customer GetOrder() error = %v, want not found", err)
+		}
+	})
 }
 
 type sequenceIDGenerator struct {
@@ -221,6 +255,18 @@ func queryAvailable(t *testing.T, db *sql.DB, productID string) int {
 		t.Fatalf("query stock: %v", err)
 	}
 	return available
+}
+
+func seedIntegrationUsers(t *testing.T, db *sql.DB, userIDs ...string) {
+	t.Helper()
+	for _, userID := range userIDs {
+		if _, err := db.Exec(`
+			INSERT INTO users (id, email, password_hash, created_at)
+			VALUES ($1, $2, 'integration-password-hash', NOW())
+		`, userID, userID+"@example.com"); err != nil {
+			t.Fatalf("seed integration user %q: %v", userID, err)
+		}
+	}
 }
 
 func withSearchPath(t *testing.T, databaseURL, schema string) string {

@@ -2,7 +2,7 @@
 
 本项目采用模块化单体作为大型项目的起点：先在一个进程内明确模块边界、依赖方向和业务责任，再根据真实的性能与部署需求拆分服务。
 
-当前项目已经实现商品查询、事务下单，以及内存和 PostgreSQL 两种存储适配器。
+当前项目已经实现用户认证、商品查询、事务下单，以及内存和 PostgreSQL 两种存储适配器。
 后续仍按照业务需求逐步扩展，不为了填满目录提前创建无用抽象。
 
 ## 目标结构
@@ -15,14 +15,14 @@ order-system/
 │   ├── app/                    # 应用组装、依赖注入、生命周期
 │   ├── config/                 # 启动配置解析与校验
 │   ├── domain/                 # 核心业务模型和业务规则
-│   │   ├── user/
+│   │   ├── identity/           # 用户和会话
 │   │   ├── catalog/            # 商品、价格
 │   │   ├── inventory/          # 库存、预占、释放
 │   │   ├── order/              # 订单与状态机
 │   │   ├── payment/            # 支付意图、支付状态
 │   │   └── notification/       # 通知业务规则
 │   ├── application/            # 用例编排和事务边界
-│   │   ├── user/
+│   │   ├── auth/               # 注册、登录和会话认证
 │   │   ├── catalog/
 │   │   ├── inventory/
 │   │   ├── order/
@@ -80,14 +80,14 @@ app 负责把 domain、application、adapters、transport 组装起来。
 
 ## 当前实现状态
 
-- `internal/domain/`：已经包含商品、库存和订单领域模型。
-- `internal/application/`：已经包含商品查询与事务下单用例。
+- `internal/domain/`：已经包含用户、会话、商品、库存和订单领域模型。
+- `internal/application/`：已经包含注册登录、会话认证、商品查询与事务下单用例。
 - `internal/adapters/memory/`：提供默认的进程内存实现。
 - `internal/adapters/postgres/`：提供连接池、商品查询、订单事务和迁移实现。
-- `internal/transport/httpapi/`：提供健康检查、商品和订单 HTTP API。
+- `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API，认证中间件将可信用户 ID 写入 Context。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。
 - `internal/app/`：根据配置选择存储适配器并完成依赖组装。
 
-后续会在认证授权、缓存、消息和可观测性等真实需求出现时继续填充目录。
+后续会在缓存、消息和可观测性等真实需求出现时继续填充目录。
 
 不要为了填满目录而创建接口或文件。目录是地图，不是任务清单。

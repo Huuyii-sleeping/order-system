@@ -24,7 +24,7 @@ type ProductCatalog interface {
 //
 // 应用层定义事务边界，适配器负责用互斥锁或数据库事务实现原子性。
 type Transaction interface {
-	GetOrderByIdempotencyKey(string) (order.Order, error)
+	GetOrderByIdempotencyKey(string, string) (order.Order, error)
 	GetStock(string) (inventory.Stock, error)
 	SaveStock(inventory.Stock) error
 	SaveOrder(order.Order) error
@@ -33,7 +33,7 @@ type Transaction interface {
 // Store 同时提供订单查询和事务能力。
 type Store interface {
 	Transact(context.Context, func(Transaction) error) error
-	GetOrderByID(context.Context, string) (order.Order, error)
+	GetOrderByIDAndCustomerID(context.Context, string, string) (order.Order, error)
 }
 
 type IDGenerator interface {
@@ -83,7 +83,7 @@ func (s *Service) CreateOrder(ctx context.Context, command CreateOrderCommand) (
 
 	var result CreateOrderResult
 	err = s.store.Transact(ctx, func(tx Transaction) error {
-		existing, err := tx.GetOrderByIdempotencyKey(command.IdempotencyKey)
+		existing, err := tx.GetOrderByIdempotencyKey(command.CustomerID, command.IdempotencyKey)
 		switch {
 		case err == nil:
 			// 相同幂等键和相同请求返回第一次的结果，不会重复扣库存。
@@ -144,8 +144,12 @@ func (s *Service) CreateOrder(ctx context.Context, command CreateOrderCommand) (
 	return result, nil
 }
 
-func (s *Service) GetOrder(ctx context.Context, orderID string) (order.Order, error) {
-	got, err := s.store.GetOrderByID(ctx, strings.TrimSpace(orderID))
+func (s *Service) GetOrder(ctx context.Context, customerID, orderID string) (order.Order, error) {
+	got, err := s.store.GetOrderByIDAndCustomerID(
+		ctx,
+		strings.TrimSpace(orderID),
+		strings.TrimSpace(customerID),
+	)
 	if err != nil {
 		return order.Order{}, fmt.Errorf("get order %q: %w", orderID, err)
 	}

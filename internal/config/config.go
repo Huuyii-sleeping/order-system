@@ -21,6 +21,9 @@ type Config struct {
 
 	StorageDriver string
 	DatabaseURL   string
+
+	SessionTTL time.Duration
+	BcryptCost int
 }
 
 func Load() (Config, error) {
@@ -30,6 +33,8 @@ func Load() (Config, error) {
 		ShutdownTimeout: 10 * time.Second,
 		StorageDriver:   strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
 		DatabaseURL:     os.Getenv("DATABASE_URL"),
+		SessionTTL:      24 * time.Hour,
+		BcryptCost:      12,
 	}
 
 	switch cfg.StorageDriver {

@@ -39,7 +39,7 @@ func main() {
 	}
 	defer services.Close()
 
-	router := httpapi.NewRouter(services.Catalog, services.Orders)
+	router := httpapi.NewRouter(services.Catalog, services.Auth, services.Orders)
 
 	// 中间件从内向外组合：
 	//

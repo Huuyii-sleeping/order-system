@@ -46,7 +46,7 @@ func TestOrderStoreRollsBackFailedTransaction(t *testing.T) {
 	if available := availableStock(t, store); available != 5 {
 		t.Errorf("available stock = %d, want 5 after rollback", available)
 	}
-	_, err = store.GetOrderByID(context.Background(), created.ID())
+	_, err = store.GetOrderByIDAndCustomerID(context.Background(), created.ID(), created.CustomerID())
 	if !errors.Is(err, order.ErrOrderNotFound) {
 		t.Fatalf("GetOrderByID() error = %v, want order not found", err)
 	}
@@ -146,6 +146,39 @@ func TestConcurrentIdempotentRequestsCreateOneOrder(t *testing.T) {
 	}
 	if available := availableStock(t, store); available != 3 {
 		t.Errorf("available stock = %d, want 3", available)
+	}
+}
+
+func TestOrderStoreHidesOrderFromAnotherCustomer(t *testing.T) {
+	store := mustOrderStore(t, 5)
+	created := mustStoredOrder(t, "order-1", "key-1")
+	err := store.Transact(context.Background(), func(tx orderapp.Transaction) error {
+		return tx.SaveOrder(created)
+	})
+	if err != nil {
+		t.Fatalf("Transact() error = %v", err)
+	}
+
+	if _, err := store.GetOrderByIDAndCustomerID(
+		context.Background(), created.ID(), "another-customer",
+	); !errors.Is(err, order.ErrOrderNotFound) {
+		t.Fatalf("cross-customer GetOrder() error = %v, want not found", err)
+	}
+}
+
+func TestIdempotencyKeyIsScopedToCustomer(t *testing.T) {
+	store := mustOrderStore(t, 5)
+	service := newOrderService(t, store)
+
+	for _, customerID := range []string{"customer-1", "customer-2"} {
+		if _, err := service.CreateOrder(context.Background(), orderapp.CreateOrderCommand{
+			CustomerID: customerID, ProductID: "product-1", Quantity: 1, IdempotencyKey: "shared-key",
+		}); err != nil {
+			t.Fatalf("CreateOrder(%s) error = %v", customerID, err)
+		}
+	}
+	if available := availableStock(t, store); available != 3 {
+		t.Errorf("available stock = %d, want 3 after two customer orders", available)
 	}
 }
 

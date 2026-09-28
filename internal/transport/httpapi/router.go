@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"net/http"
 
+	authapp "example.com/order-system/internal/application/auth"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/domain/catalog"
+	"example.com/order-system/internal/domain/identity"
 	"example.com/order-system/internal/domain/order"
 )
 
@@ -26,7 +28,17 @@ type CatalogQueries interface {
 // OrderUseCases 是订单 HTTP 接口使用的应用能力。
 type OrderUseCases interface {
 	CreateOrder(context.Context, orderapp.CreateOrderCommand) (orderapp.CreateOrderResult, error)
-	GetOrder(context.Context, string) (order.Order, error)
+	GetOrder(context.Context, string, string) (order.Order, error)
+}
+
+type AuthUseCases interface {
+	Register(context.Context, authapp.RegisterCommand) (identity.User, error)
+	Login(context.Context, authapp.LoginCommand) (authapp.LoginResult, error)
+	Authenticate(context.Context, string) (string, error)
+}
+
+type SessionAuthenticator interface {
+	Authenticate(context.Context, string) (string, error)
 }
 
 // NewRouter 创建 API 使用的 HTTP 路由。
@@ -34,7 +46,11 @@ type OrderUseCases interface {
 // 返回 http.Handler 而不是具体的 *http.ServeMux，
 // 可以让调用方只依赖标准接口。以后在路由外包装中间件时，
 // main.go 也不需要改变接收类型。
-func NewRouter(catalogQueries CatalogQueries, orderUseCases OrderUseCases) http.Handler {
+func NewRouter(
+	catalogQueries CatalogQueries,
+	authUseCases AuthUseCases,
+	orderUseCases OrderUseCases,
+) http.Handler {
 	mux := http.NewServeMux()
 
 	// Go 1.22 之后可以在路由模式中同时声明 Method 和 Path。
@@ -45,9 +61,13 @@ func NewRouter(catalogQueries CatalogQueries, orderUseCases OrderUseCases) http.
 	mux.HandleFunc("GET /products", catalogHandler.list)
 	mux.HandleFunc("GET /products/{productID}", catalogHandler.getByID)
 
+	authHandler := newAuthHandler(authUseCases)
+	mux.HandleFunc("POST /auth/register", authHandler.register)
+	mux.HandleFunc("POST /auth/login", authHandler.login)
+
 	orderHandler := newOrderHandler(orderUseCases)
-	mux.HandleFunc("POST /orders", orderHandler.create)
-	mux.HandleFunc("GET /orders/{orderID}", orderHandler.getByID)
+	mux.Handle("POST /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.create)))
+	mux.Handle("GET /orders/{orderID}", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.getByID)))
 
 	// 返回原始路由器。
 	//

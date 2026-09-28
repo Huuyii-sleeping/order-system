@@ -27,7 +27,7 @@ type OrderStore struct {
 
 	stocksByProduct         map[string]inventory.Stock
 	ordersByID              map[string]order.Order
-	orderIDByIdempotencyKey map[string]string
+	orderIDByIdempotencyKey map[idempotencyScope]string
 }
 
 func NewOrderStore(stocks []inventory.Stock) (*OrderStore, error) {
@@ -43,7 +43,7 @@ func NewOrderStore(stocks []inventory.Stock) (*OrderStore, error) {
 	return &OrderStore{
 		stocksByProduct:         stocksByProduct,
 		ordersByID:              make(map[string]order.Order),
-		orderIDByIdempotencyKey: make(map[string]string),
+		orderIDByIdempotencyKey: make(map[idempotencyScope]string),
 	}, nil
 }
 
@@ -80,7 +80,10 @@ func (s *OrderStore) Transact(ctx context.Context, fn func(orderapp.Transaction)
 	return nil
 }
 
-func (s *OrderStore) GetOrderByID(ctx context.Context, orderID string) (order.Order, error) {
+func (s *OrderStore) GetOrderByIDAndCustomerID(
+	ctx context.Context,
+	orderID, customerID string,
+) (order.Order, error) {
 	if err := ctx.Err(); err != nil {
 		return order.Order{}, err
 	}
@@ -89,7 +92,7 @@ func (s *OrderStore) GetOrderByID(ctx context.Context, orderID string) (order.Or
 	defer s.mu.RUnlock()
 
 	got, ok := s.ordersByID[orderID]
-	if !ok {
+	if !ok || got.CustomerID() != customerID {
 		return order.Order{}, order.ErrOrderNotFound
 	}
 
@@ -99,11 +102,16 @@ func (s *OrderStore) GetOrderByID(ctx context.Context, orderID string) (order.Or
 type memoryTransaction struct {
 	stocksByProduct         map[string]inventory.Stock
 	ordersByID              map[string]order.Order
-	orderIDByIdempotencyKey map[string]string
+	orderIDByIdempotencyKey map[idempotencyScope]string
 }
 
-func (tx *memoryTransaction) GetOrderByIdempotencyKey(key string) (order.Order, error) {
-	orderID, ok := tx.orderIDByIdempotencyKey[key]
+type idempotencyScope struct {
+	customerID string
+	key        string
+}
+
+func (tx *memoryTransaction) GetOrderByIdempotencyKey(customerID, key string) (order.Order, error) {
+	orderID, ok := tx.orderIDByIdempotencyKey[idempotencyScope{customerID: customerID, key: key}]
 	if !ok {
 		return order.Order{}, order.ErrOrderNotFound
 	}
@@ -133,12 +141,13 @@ func (tx *memoryTransaction) SaveOrder(created order.Order) error {
 	if _, exists := tx.ordersByID[created.ID()]; exists {
 		return ErrDuplicateOrderID
 	}
-	if _, exists := tx.orderIDByIdempotencyKey[created.IdempotencyKey()]; exists {
+	scope := idempotencyScope{customerID: created.CustomerID(), key: created.IdempotencyKey()}
+	if _, exists := tx.orderIDByIdempotencyKey[scope]; exists {
 		return ErrDuplicateIdempotencyKey
 	}
 
 	tx.ordersByID[created.ID()] = created
-	tx.orderIDByIdempotencyKey[created.IdempotencyKey()] = created.ID()
+	tx.orderIDByIdempotencyKey[scope] = created.ID()
 	return nil
 }
 

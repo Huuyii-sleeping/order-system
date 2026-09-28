@@ -15,7 +15,7 @@ func TestHealthRoute(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
 
-	httpapi.NewRouter(catalogQueriesStub{}, nil).ServeHTTP(response, request)
+	httpapi.NewRouter(catalogQueriesStub{}, nil, nil).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
@@ -99,7 +99,7 @@ func TestHealthRouteRejectsUnsupportedMethod(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/healthz", nil)
 	response := httptest.NewRecorder()
 
-	httpapi.WithRequestID(httpapi.NewRouter(catalogQueriesStub{}, nil)).ServeHTTP(response, request)
+	httpapi.WithRequestID(httpapi.NewRouter(catalogQueriesStub{}, nil, nil)).ServeHTTP(response, request)
 
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf(
@@ -120,7 +120,7 @@ func TestRouterReturnsNotFoundForUnknownPath(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/unknown", nil)
 	response := httptest.NewRecorder()
 
-	httpapi.WithRequestID(httpapi.NewRouter(catalogQueriesStub{}, nil)).ServeHTTP(response, request)
+	httpapi.WithRequestID(httpapi.NewRouter(catalogQueriesStub{}, nil, nil)).ServeHTTP(response, request)
 
 	if response.Code != http.StatusNotFound {
 		t.Fatalf(

@@ -23,6 +23,7 @@ type orderUseCasesStub struct {
 	getResult     order.Order
 	getErr        error
 	createCommand orderapp.CreateOrderCommand
+	getCustomerID string
 	getOrderID    string
 }
 
@@ -31,7 +32,8 @@ func (s *orderUseCasesStub) CreateOrder(_ context.Context, command orderapp.Crea
 	return s.createResult, s.createErr
 }
 
-func (s *orderUseCasesStub) GetOrder(_ context.Context, orderID string) (order.Order, error) {
+func (s *orderUseCasesStub) GetOrder(_ context.Context, customerID, orderID string) (order.Order, error) {
+	s.getCustomerID = customerID
 	s.getOrderID = orderID
 	return s.getResult, s.getErr
 }
@@ -41,14 +43,15 @@ func TestCreateOrderReturnsCreatedOrder(t *testing.T) {
 	useCases := &orderUseCasesStub{
 		createResult: orderapp.CreateOrderResult{Order: created, Created: true},
 	}
-	router := httpapi.NewRouter(catalogQueriesStub{}, useCases)
+	router := httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases)
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/orders",
-		bytes.NewBufferString(`{"customer_id":"customer-1","product_id":"product-1","quantity":2}`),
+		bytes.NewBufferString(`{"product_id":"product-1","quantity":2}`),
 	)
 	request.Header.Set("Content-Type", "application/json; charset=utf-8")
 	request.Header.Set(httpapi.IdempotencyKeyHeader, "key-1")
+	request.Header.Set("Authorization", "Bearer valid-token")
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
@@ -61,6 +64,9 @@ func TestCreateOrderReturnsCreatedOrder(t *testing.T) {
 	}
 	if useCases.createCommand.IdempotencyKey != "key-1" || useCases.createCommand.Quantity != 2 {
 		t.Errorf("CreateOrder() command = %+v", useCases.createCommand)
+	}
+	if useCases.createCommand.CustomerID != "customer-1" {
+		t.Errorf("CreateOrder() customer ID = %q, want authenticated user", useCases.createCommand.CustomerID)
 	}
 
 	var body struct {
@@ -82,7 +88,7 @@ func TestCreateOrderIdempotentReplayReturnsOK(t *testing.T) {
 	request := validCreateOrderRequest()
 	response := httptest.NewRecorder()
 
-	httpapi.NewRouter(catalogQueriesStub{}, useCases).ServeHTTP(response, request)
+	httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
@@ -101,7 +107,8 @@ func TestCreateOrderRejectsInvalidHTTPInput(t *testing.T) {
 	}{
 		{name: "missing content type", body: `{}`, wantStatus: http.StatusUnsupportedMediaType},
 		{name: "malformed JSON", contentType: "application/json", body: `{`, wantStatus: http.StatusBadRequest},
-		{name: "unknown field", contentType: "application/json", body: `{"customer_id":"c1","unknown":true}`, wantStatus: http.StatusBadRequest},
+		{name: "client supplied customer ID", contentType: "application/json", body: `{"customer_id":"attacker","product_id":"product-1","quantity":1}`, wantStatus: http.StatusBadRequest},
+		{name: "unknown field", contentType: "application/json", body: `{"unknown":true}`, wantStatus: http.StatusBadRequest},
 		{name: "multiple JSON values", contentType: "application/json", body: `{} {}`, wantStatus: http.StatusBadRequest},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -110,9 +117,10 @@ func TestCreateOrderRejectsInvalidHTTPInput(t *testing.T) {
 			if tt.contentType != "" {
 				request.Header.Set("Content-Type", tt.contentType)
 			}
+			request.Header.Set("Authorization", "Bearer valid-token")
 			response := httptest.NewRecorder()
 
-			httpapi.NewRouter(catalogQueriesStub{}, useCases).ServeHTTP(response, request)
+			httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, request)
 
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status code = %d, want %d", response.Code, tt.wantStatus)
@@ -142,7 +150,7 @@ func TestCreateOrderMapsBusinessErrors(t *testing.T) {
 			useCases := &orderUseCasesStub{createErr: tt.err}
 			response := httptest.NewRecorder()
 
-			httpapi.NewRouter(catalogQueriesStub{}, useCases).ServeHTTP(response, validCreateOrderRequest())
+			httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, validCreateOrderRequest())
 
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status code = %d, want %d", response.Code, tt.wantStatus)
@@ -159,13 +167,17 @@ func TestGetOrder(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/orders/order-1", nil)
 	response := httptest.NewRecorder()
 
-	httpapi.NewRouter(catalogQueriesStub{}, useCases).ServeHTTP(response, request)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
 	}
 	if useCases.getOrderID != "order-1" {
 		t.Errorf("GetOrder() ID = %q, want order-1", useCases.getOrderID)
+	}
+	if useCases.getCustomerID != "customer-1" {
+		t.Errorf("GetOrder() customer ID = %q, want customer-1", useCases.getCustomerID)
 	}
 }
 
@@ -174,7 +186,8 @@ func TestGetOrderReturnsNotFound(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/orders/missing", nil)
 	response := httptest.NewRecorder()
 
-	httpapi.NewRouter(catalogQueriesStub{}, useCases).ServeHTTP(response, request)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, request)
 
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusNotFound)
@@ -185,10 +198,11 @@ func validCreateOrderRequest() *http.Request {
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/orders",
-		bytes.NewBufferString(`{"customer_id":"customer-1","product_id":"product-1","quantity":2}`),
+		bytes.NewBufferString(`{"product_id":"product-1","quantity":2}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(httpapi.IdempotencyKeyHeader, "key-1")
+	request.Header.Set("Authorization", "Bearer valid-token")
 	return request
 }
 

@@ -22,10 +22,12 @@ func (s productCatalogStub) GetByID(context.Context, string) (catalog.Product, e
 }
 
 type storeStub struct {
-	tx       *transactionStub
-	order    order.Order
-	err      error
-	transact bool
+	tx         *transactionStub
+	order      order.Order
+	err        error
+	transact   bool
+	orderID    string
+	customerID string
 }
 
 func (s *storeStub) Transact(ctx context.Context, fn func(orderapp.Transaction) error) error {
@@ -40,7 +42,9 @@ func (s *storeStub) Transact(ctx context.Context, fn func(orderapp.Transaction) 
 	return fn(s.tx)
 }
 
-func (s *storeStub) GetOrderByID(context.Context, string) (order.Order, error) {
+func (s *storeStub) GetOrderByIDAndCustomerID(_ context.Context, orderID, customerID string) (order.Order, error) {
+	s.orderID = orderID
+	s.customerID = customerID
 	return s.order, s.err
 }
 
@@ -56,7 +60,7 @@ type transactionStub struct {
 	saveOrderCalled bool
 }
 
-func (t *transactionStub) GetOrderByIdempotencyKey(string) (order.Order, error) {
+func (t *transactionStub) GetOrderByIdempotencyKey(string, string) (order.Order, error) {
 	return t.existing, t.existingErr
 }
 
@@ -210,6 +214,22 @@ func TestCreateOrderValidatesBeforeCallingDependencies(t *testing.T) {
 	}
 	if store.transact {
 		t.Fatal("invalid command must not start a transaction")
+	}
+}
+
+func TestGetOrderScopesQueryToAuthenticatedCustomer(t *testing.T) {
+	store := &storeStub{order: mustOrder(t, "key-1", 1)}
+	service := orderapp.NewService(productCatalogStub{}, store, idGeneratorStub{}, clockStub{})
+
+	got, err := service.GetOrder(context.Background(), " customer-1 ", " order-existing ")
+	if err != nil {
+		t.Fatalf("GetOrder() error = %v", err)
+	}
+	if got.ID() != "order-existing" {
+		t.Errorf("order ID = %q", got.ID())
+	}
+	if store.customerID != "customer-1" || store.orderID != "order-existing" {
+		t.Errorf("store query = customer %q, order %q", store.customerID, store.orderID)
 	}
 }
 

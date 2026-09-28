@@ -30,9 +30,8 @@ func newOrderHandler(useCases OrderUseCases) *orderHandler {
 }
 
 type createOrderRequest struct {
-	CustomerID string `json:"customer_id"`
-	ProductID  string `json:"product_id"`
-	Quantity   int    `json:"quantity"`
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
 }
 
 type orderResponse struct {
@@ -47,6 +46,12 @@ type orderResponse struct {
 }
 
 func (h *orderHandler) create(w http.ResponseWriter, r *http.Request) {
+	userID, ok := AuthenticatedUserID(r.Context())
+	if !ok {
+		writeUnauthorized(w)
+		return
+	}
+
 	if !hasJSONContentType(r.Header.Get("Content-Type")) {
 		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
 		return
@@ -59,7 +64,7 @@ func (h *orderHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.useCases.CreateOrder(r.Context(), orderapp.CreateOrderCommand{
-		CustomerID:     request.CustomerID,
+		CustomerID:     userID,
 		ProductID:      request.ProductID,
 		Quantity:       request.Quantity,
 		IdempotencyKey: r.Header.Get(IdempotencyKeyHeader),
@@ -79,7 +84,13 @@ func (h *orderHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *orderHandler) getByID(w http.ResponseWriter, r *http.Request) {
-	got, err := h.useCases.GetOrder(r.Context(), r.PathValue("orderID"))
+	userID, ok := AuthenticatedUserID(r.Context())
+	if !ok {
+		writeUnauthorized(w)
+		return
+	}
+
+	got, err := h.useCases.GetOrder(r.Context(), userID, r.PathValue("orderID"))
 	if err != nil {
 		if errors.Is(err, order.ErrOrderNotFound) {
 			writeError(w, http.StatusNotFound, "order not found")
@@ -95,8 +106,6 @@ func (h *orderHandler) getByID(w http.ResponseWriter, r *http.Request) {
 
 func writeCreateOrderError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, order.ErrInvalidCustomerID):
-		writeError(w, http.StatusBadRequest, "customer_id is required")
 	case errors.Is(err, order.ErrInvalidProductID):
 		writeError(w, http.StatusBadRequest, "product_id is required")
 	case errors.Is(err, order.ErrInvalidQuantity):

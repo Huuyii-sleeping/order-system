@@ -28,7 +28,7 @@ func (s catalogQueriesStub) GetProduct(context.Context, string) (catalog.Product
 
 func TestListProducts(t *testing.T) {
 	product := mustProduct(t, "product-1", "Keyboard", 12900)
-	router := httpapi.NewRouter(catalogQueriesStub{products: []catalog.Product{product}}, nil)
+	router := httpapi.NewRouter(catalogQueriesStub{products: []catalog.Product{product}}, nil, nil)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/products", nil))
@@ -55,7 +55,7 @@ func TestListProducts(t *testing.T) {
 
 func TestGetProduct(t *testing.T) {
 	product := mustProduct(t, "product-1", "Keyboard", 12900)
-	router := httpapi.NewRouter(catalogQueriesStub{product: product}, nil)
+	router := httpapi.NewRouter(catalogQueriesStub{product: product}, nil, nil)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/products/product-1", nil))
@@ -78,7 +78,7 @@ func TestGetProduct(t *testing.T) {
 }
 
 func TestGetProductReturnsNotFound(t *testing.T) {
-	router := httpapi.NewRouter(catalogQueriesStub{err: catalog.ErrProductNotFound}, nil)
+	router := httpapi.NewRouter(catalogQueriesStub{err: catalog.ErrProductNotFound}, nil, nil)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/products/missing", nil))
@@ -89,7 +89,7 @@ func TestGetProductReturnsNotFound(t *testing.T) {
 }
 
 func TestCatalogHandlerHidesInternalError(t *testing.T) {
-	router := httpapi.NewRouter(catalogQueriesStub{err: errors.New("database password leaked")}, nil)
+	router := httpapi.NewRouter(catalogQueriesStub{err: errors.New("database password leaked")}, nil, nil)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/products", nil))

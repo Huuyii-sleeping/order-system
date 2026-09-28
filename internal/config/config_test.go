@@ -37,6 +37,8 @@ func TestLoad(t *testing.T) {
 				HTTPAddr:        ":8080",
 				ShutdownTimeout: 10 * time.Second,
 				StorageDriver:   config.StorageMemory,
+				SessionTTL:      24 * time.Hour,
+				BcryptCost:      12,
 			},
 		},
 		{
@@ -52,6 +54,8 @@ func TestLoad(t *testing.T) {
 				ShutdownTimeout: 30 * time.Second,
 				StorageDriver:   config.StoragePostgres,
 				DatabaseURL:     "postgres://localhost/order_system",
+				SessionTTL:      24 * time.Hour,
+				BcryptCost:      12,
 			},
 		},
 		{
