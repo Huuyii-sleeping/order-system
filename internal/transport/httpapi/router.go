@@ -35,6 +35,8 @@ type AuthUseCases interface {
 	Register(context.Context, authapp.RegisterCommand) (identity.User, error)
 	Login(context.Context, authapp.LoginCommand) (authapp.LoginResult, error)
 	Authenticate(context.Context, string) (string, error)
+	Logout(context.Context, string) error
+	LogoutAll(context.Context, string) error
 }
 
 type SessionAuthenticator interface {
@@ -64,6 +66,8 @@ func NewRouter(
 	authHandler := newAuthHandler(authUseCases)
 	mux.HandleFunc("POST /auth/register", authHandler.register)
 	mux.HandleFunc("POST /auth/login", authHandler.login)
+	mux.Handle("POST /auth/logout", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logout)))
+	mux.Handle("POST /auth/logout-all", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logoutAll)))
 
 	orderHandler := newOrderHandler(orderUseCases)
 	mux.Handle("POST /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.create)))

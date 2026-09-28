@@ -28,6 +28,8 @@ type Store interface {
 	GetUserByEmail(context.Context, string) (identity.User, error)
 	CreateSession(context.Context, identity.Session) error
 	GetSessionByTokenHash(context.Context, string, time.Time) (identity.Session, error)
+	RevokeSession(context.Context, string) error
+	RevokeAllSessions(context.Context, string) error
 }
 
 type PasswordHasher interface {
@@ -164,6 +166,34 @@ func (s *Service) Authenticate(ctx context.Context, token string) (string, error
 	}
 
 	return session.UserID(), nil
+}
+
+// Logout 撤销当前 Token。删除不存在的记录也视为成功，
+// 让存储层的撤销操作具备幂等语义。HTTP 入口仍会先验证 Token 是否有效。
+func (s *Service) Logout(ctx context.Context, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ErrInvalidSession
+	}
+
+	if err := s.store.RevokeSession(ctx, hashToken(token)); err != nil {
+		return fmt.Errorf("revoke session: %w", err)
+	}
+	return nil
+}
+
+// LogoutAll 撤销用户的全部会话，用于用户修改安全状态或怀疑凭证泄露时
+// 立即让所有设备下线。
+func (s *Service) LogoutAll(ctx context.Context, userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ErrInvalidSession
+	}
+
+	if err := s.store.RevokeAllSessions(ctx, userID); err != nil {
+		return fmt.Errorf("revoke all sessions: %w", err)
+	}
+	return nil
 }
 
 func validatePassword(password string) error {

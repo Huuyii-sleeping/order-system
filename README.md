@@ -77,6 +77,16 @@ curl http://127.0.0.1:8080/orders/<order-id> \
   -H 'Authorization: Bearer <access-token>'
 ```
 
+登出当前设备，或让当前用户的所有设备立即下线：
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/auth/logout \
+  -H 'Authorization: Bearer <access-token>'
+
+curl -i -X POST http://127.0.0.1:8080/auth/logout-all \
+  -H 'Authorization: Bearer <access-token>'
+```
+
 相同参数和 `Idempotency-Key` 重试时会返回原订单，不会重复扣库存。
 同一个用户用同一个 Key 携带不同参数时返回 `409 Conflict`。不同用户的
 幂等键空间相互独立。

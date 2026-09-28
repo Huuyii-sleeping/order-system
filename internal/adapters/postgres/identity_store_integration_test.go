@@ -90,6 +90,44 @@ func TestIntegrationIdentityStore(t *testing.T) {
 			t.Fatalf("expired GetSession() error = %v", err)
 		}
 	})
+
+	t.Run("revokes one session or all user sessions", func(t *testing.T) {
+		first, err := identity.NewSession(
+			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			user.ID(), now, now.Add(time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create first session: %v", err)
+		}
+		second, err := identity.NewSession(
+			"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			user.ID(), now, now.Add(time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create second session: %v", err)
+		}
+		if err := store.CreateSession(ctx, first); err != nil {
+			t.Fatalf("CreateSession(first) error = %v", err)
+		}
+		if err := store.CreateSession(ctx, second); err != nil {
+			t.Fatalf("CreateSession(second) error = %v", err)
+		}
+		if err := store.RevokeSession(ctx, first.TokenHash()); err != nil {
+			t.Fatalf("RevokeSession() error = %v", err)
+		}
+		if _, err := store.GetSessionByTokenHash(ctx, first.TokenHash(), now); !errors.Is(err, identity.ErrSessionNotFound) {
+			t.Fatalf("revoked session lookup error = %v", err)
+		}
+		if _, err := store.GetSessionByTokenHash(ctx, second.TokenHash(), now); err != nil {
+			t.Fatalf("remaining session lookup error = %v", err)
+		}
+		if err := store.RevokeAllSessions(ctx, user.ID()); err != nil {
+			t.Fatalf("RevokeAllSessions() error = %v", err)
+		}
+		if _, err := store.GetSessionByTokenHash(ctx, second.TokenHash(), now); !errors.Is(err, identity.ErrSessionNotFound) {
+			t.Fatalf("all-revoked session lookup error = %v", err)
+		}
+	})
 }
 
 func openMigratedIdentityTestDB(t *testing.T, ctx context.Context, databaseURL string) *sql.DB {

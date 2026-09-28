@@ -25,6 +25,10 @@ type authUseCasesStub struct {
 	userID          string
 	authErr         error
 	authToken       string
+	logoutToken     string
+	logoutErr       error
+	logoutAllUserID string
+	logoutAllErr    error
 }
 
 func (s *authUseCasesStub) Register(_ context.Context, command authapp.RegisterCommand) (identity.User, error) {
@@ -40,6 +44,16 @@ func (s *authUseCasesStub) Login(_ context.Context, command authapp.LoginCommand
 func (s *authUseCasesStub) Authenticate(_ context.Context, token string) (string, error) {
 	s.authToken = token
 	return s.userID, s.authErr
+}
+
+func (s *authUseCasesStub) Logout(_ context.Context, token string) error {
+	s.logoutToken = token
+	return s.logoutErr
+}
+
+func (s *authUseCasesStub) LogoutAll(_ context.Context, userID string) error {
+	s.logoutAllUserID = userID
+	return s.logoutAllErr
 }
 
 func authenticatedAs(userID string) *authUseCasesStub {
@@ -165,6 +179,38 @@ func TestProtectedOrderRouteHidesAuthenticationInfrastructureError(t *testing.T)
 
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestLogoutRevokesCurrentBearerToken(t *testing.T) {
+	auth := authenticatedAs("user-1")
+	request := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	request.Header.Set("Authorization", "Bearer session-token")
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if auth.authToken != "session-token" || auth.logoutToken != "session-token" {
+		t.Errorf("tokens passed to auth/logout = %q/%q", auth.authToken, auth.logoutToken)
+	}
+}
+
+func TestLogoutAllUsesAuthenticatedUserFromContext(t *testing.T) {
+	auth := authenticatedAs("user-1")
+	request := httptest.NewRequest(http.MethodPost, "/auth/logout-all", nil)
+	request.Header.Set("Authorization", "Bearer session-token")
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if auth.logoutAllUserID != "user-1" {
+		t.Errorf("LogoutAll() user ID = %q, want user-1", auth.logoutAllUserID)
 	}
 }
 

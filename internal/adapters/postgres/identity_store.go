@@ -110,3 +110,21 @@ func (s *IdentityStore) GetSessionByTokenHash(
 	}
 	return session, nil
 }
+
+func (s *IdentityStore) RevokeSession(ctx context.Context, tokenHash string) error {
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM sessions WHERE token_hash = $1
+	`, tokenHash); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	return nil
+}
+
+func (s *IdentityStore) RevokeAllSessions(ctx context.Context, userID string) error {
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM sessions WHERE user_id = $1
+	`, userID); err != nil {
+		return fmt.Errorf("delete user sessions: %w", err)
+	}
+	return nil
+}

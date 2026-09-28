@@ -80,3 +80,29 @@ func (s *IdentityStore) GetSessionByTokenHash(
 	}
 	return session, nil
 }
+
+func (s *IdentityStore) RevokeSession(ctx context.Context, tokenHash string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessionsByTokenHash, tokenHash)
+	return nil
+}
+
+func (s *IdentityStore) RevokeAllSessions(ctx context.Context, userID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tokenHash, session := range s.sessionsByTokenHash {
+		if session.UserID() == userID {
+			delete(s.sessionsByTokenHash, tokenHash)
+		}
+	}
+	return nil
+}

@@ -90,6 +90,44 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *authHandler) logout(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		writeUnauthorized(w)
+		return
+	}
+
+	if err := h.useCases.Logout(r.Context(), token); err != nil {
+		if errors.Is(err, authapp.ErrInvalidSession) {
+			writeUnauthorized(w)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *authHandler) logoutAll(w http.ResponseWriter, r *http.Request) {
+	userID, ok := AuthenticatedUserID(r.Context())
+	if !ok {
+		writeUnauthorized(w)
+		return
+	}
+
+	if err := h.useCases.LogoutAll(r.Context(), userID); err != nil {
+		if errors.Is(err, authapp.ErrInvalidSession) {
+			writeUnauthorized(w)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentialsRequest, bool) {
 	if !hasJSONContentType(r.Header.Get("Content-Type")) {
 		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json")

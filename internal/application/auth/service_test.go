@@ -30,9 +30,20 @@ type idGeneratorStub struct{ id string }
 
 func (s idGeneratorStub) NewID() (string, error) { return s.id, nil }
 
-type tokenGeneratorStub struct{ token string }
+type tokenGeneratorStub struct {
+	token  string
+	tokens []string
+	next   int
+}
 
-func (s tokenGeneratorStub) NewToken() (string, error) { return s.token, nil }
+func (s *tokenGeneratorStub) NewToken() (string, error) {
+	if len(s.tokens) > 0 {
+		token := s.tokens[s.next]
+		s.next++
+		return token, nil
+	}
+	return s.token, nil
+}
 
 type clockStub struct{ now time.Time }
 
@@ -150,10 +161,85 @@ func TestLoginUsesOnePublicErrorForUnknownUserAndWrongPassword(t *testing.T) {
 	}
 }
 
+func TestLogoutRevokesOnlyTheSelectedSession(t *testing.T) {
+	store := memory.NewIdentityStore()
+	hasher := &passwordHasherStub{hash: "stored-password-hash", matches: true}
+	clock := &clockStub{now: time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)}
+	tokens := &tokenGeneratorStub{tokens: []string{"first-session-token", "second-session-token"}}
+	service := authapp.NewService(
+		store, hasher, idGeneratorStub{id: "user-1"}, tokens, clock, time.Hour,
+	)
+	if _, err := service.Register(context.Background(), authapp.RegisterCommand{
+		Email: "learner@example.com", Password: "correct-password",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	first, err := service.Login(context.Background(), authapp.LoginCommand{
+		Email: "learner@example.com", Password: "correct-password",
+	})
+	if err != nil {
+		t.Fatalf("first Login() error = %v", err)
+	}
+	clock.now = clock.now.Add(time.Minute)
+	second, err := service.Login(context.Background(), authapp.LoginCommand{
+		Email: "learner@example.com", Password: "correct-password",
+	})
+	if err != nil {
+		t.Fatalf("second Login() error = %v", err)
+	}
+
+	if err := service.Logout(context.Background(), first.Token); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+	if _, err := service.Authenticate(context.Background(), first.Token); !errors.Is(err, authapp.ErrInvalidSession) {
+		t.Fatalf("revoked Authenticate() error = %v", err)
+	}
+	if _, err := service.Authenticate(context.Background(), second.Token); err != nil {
+		t.Fatalf("other session Authenticate() error = %v", err)
+	}
+	if err := service.Logout(context.Background(), first.Token); err != nil {
+		t.Fatalf("repeated Logout() error = %v", err)
+	}
+}
+
+func TestLogoutAllRevokesEverySessionForTheUser(t *testing.T) {
+	store := memory.NewIdentityStore()
+	hasher := &passwordHasherStub{hash: "stored-password-hash", matches: true}
+	clock := &clockStub{now: time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)}
+	tokens := &tokenGeneratorStub{tokens: []string{"first-session-token", "second-session-token"}}
+	service := authapp.NewService(
+		store, hasher, idGeneratorStub{id: "user-1"}, tokens, clock, time.Hour,
+	)
+	if _, err := service.Register(context.Background(), authapp.RegisterCommand{
+		Email: "learner@example.com", Password: "correct-password",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	first, err := service.Login(context.Background(), authapp.LoginCommand{Email: "learner@example.com", Password: "correct-password"})
+	if err != nil {
+		t.Fatalf("first Login() error = %v", err)
+	}
+	clock.now = clock.now.Add(time.Minute)
+	second, err := service.Login(context.Background(), authapp.LoginCommand{Email: "learner@example.com", Password: "correct-password"})
+	if err != nil {
+		t.Fatalf("second Login() error = %v", err)
+	}
+
+	if err := service.LogoutAll(context.Background(), first.User.ID()); err != nil {
+		t.Fatalf("LogoutAll() error = %v", err)
+	}
+	for _, token := range []string{first.Token, second.Token} {
+		if _, err := service.Authenticate(context.Background(), token); !errors.Is(err, authapp.ErrInvalidSession) {
+			t.Fatalf("Authenticate() after LogoutAll() error = %v", err)
+		}
+	}
+}
+
 func newAuthService(store authapp.Store, hasher authapp.PasswordHasher) (*authapp.Service, *clockStub) {
 	clock := &clockStub{now: time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)}
 	return authapp.NewService(
 		store, hasher, idGeneratorStub{id: "user-1"},
-		tokenGeneratorStub{token: "raw-session-token"}, clock, time.Hour,
+		&tokenGeneratorStub{token: "raw-session-token"}, clock, time.Hour,
 	), clock
 }
