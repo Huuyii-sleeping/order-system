@@ -35,6 +35,22 @@ type loginResponse struct {
 	User        userResponse `json:"user"`
 }
 
+const refreshCookieName = "refresh_token"
+
+func setRefreshCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name: refreshCookieName, Value: token, Path: "/auth",
+		Expires: expiresAt, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearRefreshCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: refreshCookieName, Value: "", Path: "/auth", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	})
+}
+
 func (h *authHandler) register(w http.ResponseWriter, r *http.Request) {
 	request, ok := decodeCredentials(w, r)
 	if !ok {
@@ -80,14 +96,48 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 登录响应包含原始会话 Token，禁止代理和浏览器把它缓存下来。
+	// Access Token 通过响应体返回；Refresh Token 只通过 HttpOnly Cookie 返回，
+	// 浏览器脚本无法直接读取长期凭证。
 	w.Header().Set("Cache-Control", "no-store")
+	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt)
 	_ = writeJSON(w, http.StatusOK, loginResponse{
-		AccessToken: result.Token,
+		AccessToken: result.AccessToken,
 		TokenType:   "Bearer",
-		ExpiresAt:   result.ExpiresAt,
+		ExpiresAt:   result.AccessExpiresAt,
 		User:        toUserResponse(result.User),
 	})
+}
+
+func (h *authHandler) refresh(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(refreshCookieName)
+	if err != nil || cookie.Value == "" {
+		writeError(w, http.StatusUnauthorized, "invalid or missing refresh token")
+		return
+	}
+
+	result, err := h.useCases.Refresh(r.Context(), cookie.Value)
+	if errors.Is(err, authapp.ErrInvalidRefresh) {
+		clearRefreshCookie(w)
+		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt)
+	w.Header().Set("Cache-Control", "no-store")
+	response := struct {
+		AccessToken string    `json:"access_token"`
+		TokenType   string    `json:"token_type"`
+		ExpiresAt   time.Time `json:"expires_at"`
+	}{
+		AccessToken: result.AccessToken,
+		TokenType:   "Bearer",
+		ExpiresAt:   result.AccessExpiresAt,
+	}
+	_ = writeJSON(w, http.StatusOK, response)
 }
 
 func (h *authHandler) logout(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +156,7 @@ func (h *authHandler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clearRefreshCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -125,6 +176,7 @@ func (h *authHandler) logoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clearRefreshCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

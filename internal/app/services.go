@@ -74,7 +74,8 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			idgenerator.Random{},
 			sessiontoken.Random{},
 			clock.System{},
-			cfg.SessionTTL,
+			cfg.AccessTokenTTL,
+			cfg.RefreshTokenTTL,
 		),
 		Orders: orderapp.NewService(
 			products,

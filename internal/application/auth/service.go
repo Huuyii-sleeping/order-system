@@ -21,6 +21,7 @@ const (
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidSession     = errors.New("invalid or expired session")
+	ErrInvalidRefresh     = errors.New("invalid or expired refresh token")
 )
 
 type Store interface {
@@ -28,6 +29,10 @@ type Store interface {
 	GetUserByEmail(context.Context, string) (identity.User, error)
 	CreateSession(context.Context, identity.Session) error
 	GetSessionByTokenHash(context.Context, string, time.Time) (identity.Session, error)
+	CreateRefreshToken(context.Context, identity.RefreshToken) error
+	GetRefreshTokenByHash(context.Context, string) (identity.RefreshToken, error)
+	CreateCredentials(context.Context, identity.Session, identity.RefreshToken) error
+	RotateRefreshToken(context.Context, string, time.Time, identity.Session, identity.RefreshToken) error
 	RevokeSession(context.Context, string) error
 	RevokeAllSessions(context.Context, string) error
 }
@@ -55,7 +60,8 @@ type Service struct {
 	ids        IDGenerator
 	tokens     TokenGenerator
 	clock      Clock
-	sessionTTL time.Duration
+	accessTTL  time.Duration
+	refreshTTL time.Duration
 }
 
 func NewService(
@@ -64,11 +70,11 @@ func NewService(
 	ids IDGenerator,
 	tokens TokenGenerator,
 	clock Clock,
-	sessionTTL time.Duration,
+	accessTTL, refreshTTL time.Duration,
 ) *Service {
 	return &Service{
 		store: store, passwords: passwords, ids: ids, tokens: tokens,
-		clock: clock, sessionTTL: sessionTTL,
+		clock: clock, accessTTL: accessTTL, refreshTTL: refreshTTL,
 	}
 }
 
@@ -112,9 +118,11 @@ type LoginCommand struct {
 }
 
 type LoginResult struct {
-	User      identity.User
-	Token     string
-	ExpiresAt time.Time
+	User             identity.User
+	AccessToken      string
+	AccessExpiresAt  time.Time
+	RefreshToken     string
+	RefreshExpiresAt time.Time
 }
 
 func (s *Service) Login(ctx context.Context, command LoginCommand) (LoginResult, error) {
@@ -134,21 +142,116 @@ func (s *Service) Login(ctx context.Context, command LoginCommand) (LoginResult,
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
-	token, err := s.tokens.NewToken()
+	accessToken, err := s.tokens.NewToken()
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("generate session token: %w", err)
+		return LoginResult{}, fmt.Errorf("generate access token: %w", err)
+	}
+	refreshToken, err := s.tokens.NewToken()
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("generate refresh token: %w", err)
+	}
+	familyID, err := s.ids.NewID()
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("generate credential family ID: %w", err)
 	}
 	createdAt := s.clock.Now()
-	expiresAt := createdAt.Add(s.sessionTTL)
-	session, err := identity.NewSession(hashToken(token), user.ID(), createdAt, expiresAt)
+	accessExpiresAt := createdAt.Add(s.accessTTL)
+	refreshExpiresAt := createdAt.Add(s.refreshTTL)
+	session, err := identity.NewSessionForFamily(
+		hashToken(accessToken), user.ID(), familyID, createdAt, accessExpiresAt,
+	)
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("create session: %w", err)
+		return LoginResult{}, fmt.Errorf("create access session: %w", err)
 	}
-	if err := s.store.CreateSession(ctx, session); err != nil {
-		return LoginResult{}, fmt.Errorf("save session: %w", err)
+	refresh, err := identity.NewRefreshToken(
+		hashToken(refreshToken), user.ID(), familyID, createdAt, refreshExpiresAt,
+	)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("create refresh token: %w", err)
+	}
+	if err := s.store.CreateCredentials(ctx, session, refresh); err != nil {
+		return LoginResult{}, fmt.Errorf("save login credentials: %w", err)
 	}
 
-	return LoginResult{User: user, Token: token, ExpiresAt: expiresAt}, nil
+	return LoginResult{
+		User:             user,
+		AccessToken:      accessToken,
+		AccessExpiresAt:  accessExpiresAt,
+		RefreshToken:     refreshToken,
+		RefreshExpiresAt: refreshExpiresAt,
+	}, nil
+}
+
+type RefreshResult struct {
+	AccessToken      string
+	AccessExpiresAt  time.Time
+	RefreshToken     string
+	RefreshExpiresAt time.Time
+}
+
+// Refresh 只接受 Refresh Token，并通过一次原子轮换同时消费旧 Token、
+// 创建新的 Access Session 和新的 Refresh Token。
+func (s *Service) Refresh(ctx context.Context, token string) (RefreshResult, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return RefreshResult{}, ErrInvalidRefresh
+	}
+
+	now := s.clock.Now()
+	current, err := s.store.GetRefreshTokenByHash(ctx, hashToken(token))
+	if errors.Is(err, identity.ErrRefreshTokenNotFound) ||
+		errors.Is(err, identity.ErrSessionNotFound) {
+		return RefreshResult{}, ErrInvalidRefresh
+	}
+	if err != nil {
+		return RefreshResult{}, fmt.Errorf("get refresh token: %w", err)
+	}
+	if !current.ExpiresAt().After(now) || current.IsRevoked() {
+		return RefreshResult{}, ErrInvalidRefresh
+	}
+
+	accessToken, err := s.tokens.NewToken()
+	if err != nil {
+		return RefreshResult{}, fmt.Errorf("generate access token: %w", err)
+	}
+	newRefreshToken, err := s.tokens.NewToken()
+	if err != nil {
+		return RefreshResult{}, fmt.Errorf("generate refresh token: %w", err)
+	}
+	accessExpiresAt := now.Add(s.accessTTL)
+	refreshExpiresAt := now.Add(s.refreshTTL)
+	access, err := identity.NewSessionForFamily(
+		hashToken(accessToken), current.UserID(), current.FamilyID(), now, accessExpiresAt,
+	)
+	if err != nil {
+		return RefreshResult{}, fmt.Errorf("create refreshed access session: %w", err)
+	}
+	replacement, err := identity.NewRefreshToken(
+		hashToken(newRefreshToken), current.UserID(), current.FamilyID(), now, refreshExpiresAt,
+	)
+	if err != nil {
+		return RefreshResult{}, fmt.Errorf("create replacement refresh token: %w", err)
+	}
+
+	if err := s.store.RotateRefreshToken(
+		ctx, current.TokenHash(), now, access, replacement,
+	); errors.Is(err, identity.ErrRefreshTokenReused) {
+		// 旧 Token 被再次使用，说明可能发生了窃取或并发重放。
+		// 存储层会在同一原子操作中撤销整个 family，避免攻击者继续使用新 Token。
+		return RefreshResult{}, ErrInvalidRefresh
+	} else if errors.Is(err, identity.ErrRefreshTokenRevoked) ||
+		errors.Is(err, identity.ErrRefreshTokenNotFound) {
+		return RefreshResult{}, ErrInvalidRefresh
+	} else if err != nil {
+		return RefreshResult{}, fmt.Errorf("rotate refresh token: %w", err)
+	}
+
+	return RefreshResult{
+		AccessToken:      accessToken,
+		AccessExpiresAt:  accessExpiresAt,
+		RefreshToken:     newRefreshToken,
+		RefreshExpiresAt: refreshExpiresAt,
+	}, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, token string) (string, error) {

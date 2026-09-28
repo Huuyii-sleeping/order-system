@@ -1,8 +1,9 @@
 # Order System
 
 这是一个用于学习 Go 后端工程的模块化单体订单系统。目前包含商品查询、
-库存预占、事务下单、幂等创建订单、用户注册登录、Bearer 会话认证、
-订单所有权隔离、HTTP 中间件，以及内存和 PostgreSQL 两种存储实现。
+库存预占、事务下单、幂等创建订单、用户注册登录、短期 Access Token、
+Refresh Token 轮换、订单所有权隔离、HTTP 中间件，以及内存和 PostgreSQL
+两种存储实现。
 
 ## 直接运行（内存模式）
 
@@ -56,7 +57,8 @@ curl -i http://127.0.0.1:8080/auth/register \
   -d '{"email":"learner@example.com","password":"learning-password"}'
 ```
 
-登录并从响应中取得 `access_token`：
+登录并从响应中取得 `access_token`。Refresh Token 会由服务端写入
+`HttpOnly` Cookie，客户端不需要读取它：
 
 ```bash
 curl -i http://127.0.0.1:8080/auth/login \
@@ -86,6 +88,16 @@ curl -i -X POST http://127.0.0.1:8080/auth/logout \
 curl -i -X POST http://127.0.0.1:8080/auth/logout-all \
   -H 'Authorization: Bearer <access-token>'
 ```
+
+Access Token 过期后，浏览器携带登录时收到的 Cookie 调用刷新接口：
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/auth/refresh \
+  -H 'Cookie: refresh_token=<refresh-token>'
+```
+
+每次刷新都会轮换 Refresh Token。旧 Refresh Token 再次使用会被识别为重放，
+并撤销同一个凭证家族中的 Access Session 和 Refresh Token。
 
 相同参数和 `Idempotency-Key` 重试时会返回原订单，不会重复扣库存。
 同一个用户用同一个 Key 携带不同参数时返回 `409 Conflict`。不同用户的

@@ -26,9 +26,20 @@ func (s *passwordHasherStub) Matches(hash, password string) bool {
 	return s.matches && hash == s.hash && password == "correct-password"
 }
 
-type idGeneratorStub struct{ id string }
+type idGeneratorStub struct {
+	id   string
+	ids  []string
+	next int
+}
 
-func (s idGeneratorStub) NewID() (string, error) { return s.id, nil }
+func (s *idGeneratorStub) NewID() (string, error) {
+	if len(s.ids) > 0 {
+		id := s.ids[s.next]
+		s.next++
+		return id, nil
+	}
+	return s.id, nil
+}
 
 type tokenGeneratorStub struct {
 	token  string
@@ -116,14 +127,17 @@ func TestLoginCreatesHashedExpiringSessionAndAuthenticatesToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login() error = %v", err)
 	}
-	if result.Token != "raw-session-token" {
-		t.Errorf("token = %q", result.Token)
+	if result.AccessToken != "raw-access-token" {
+		t.Errorf("access token = %q", result.AccessToken)
 	}
-	if want := clock.now.Add(time.Hour); !result.ExpiresAt.Equal(want) {
-		t.Errorf("expires at = %v, want %v", result.ExpiresAt, want)
+	if want := clock.now.Add(time.Hour); !result.AccessExpiresAt.Equal(want) {
+		t.Errorf("access expires at = %v, want %v", result.AccessExpiresAt, want)
+	}
+	if result.RefreshToken != "raw-refresh-token" {
+		t.Errorf("refresh token = %q", result.RefreshToken)
 	}
 
-	userID, err := service.Authenticate(context.Background(), result.Token)
+	userID, err := service.Authenticate(context.Background(), result.AccessToken)
 	if err != nil || userID != result.User.ID() {
 		t.Fatalf("Authenticate() = %q, %v", userID, err)
 	}
@@ -131,8 +145,8 @@ func TestLoginCreatesHashedExpiringSessionAndAuthenticatesToken(t *testing.T) {
 		t.Fatalf("Authenticate(unknown) error = %v", err)
 	}
 
-	clock.now = result.ExpiresAt
-	if _, err := service.Authenticate(context.Background(), result.Token); !errors.Is(err, authapp.ErrInvalidSession) {
+	clock.now = result.AccessExpiresAt
+	if _, err := service.Authenticate(context.Background(), result.AccessToken); !errors.Is(err, authapp.ErrInvalidSession) {
 		t.Fatalf("Authenticate(expired) error = %v", err)
 	}
 }
@@ -161,13 +175,60 @@ func TestLoginUsesOnePublicErrorForUnknownUserAndWrongPassword(t *testing.T) {
 	}
 }
 
+func TestRefreshRotatesTokenAndRejectsReplay(t *testing.T) {
+	store := memory.NewIdentityStore()
+	hasher := &passwordHasherStub{hash: "stored-password-hash", matches: true}
+	clock := &clockStub{now: time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)}
+	ids := &idGeneratorStub{ids: []string{"user-1", "family-1"}}
+	tokens := &tokenGeneratorStub{tokens: []string{
+		"access-1", "refresh-1", "access-2", "refresh-2", "access-3", "refresh-3",
+	}}
+	service := authapp.NewService(store, hasher, ids, tokens, clock, time.Hour, 24*time.Hour)
+	if _, err := service.Register(context.Background(), authapp.RegisterCommand{
+		Email: "learner@example.com", Password: "correct-password",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	login, err := service.Login(context.Background(), authapp.LoginCommand{
+		Email: "learner@example.com", Password: "correct-password",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	clock.now = clock.now.Add(time.Minute)
+	refreshed, err := service.Refresh(context.Background(), login.RefreshToken)
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if refreshed.AccessToken != "access-2" || refreshed.RefreshToken != "refresh-2" {
+		t.Fatalf("refreshed credentials = %+v", refreshed)
+	}
+	if _, err := service.Authenticate(context.Background(), login.AccessToken); err != nil {
+		t.Fatalf("old access token error = %v, want still valid until expiry", err)
+	}
+	if _, err := service.Refresh(context.Background(), login.RefreshToken); !errors.Is(err, authapp.ErrInvalidRefresh) {
+		t.Fatalf("replayed refresh error = %v, want invalid", err)
+	}
+	if _, err := service.Authenticate(context.Background(), refreshed.AccessToken); !errors.Is(err, authapp.ErrInvalidSession) {
+		t.Fatalf("rotated access token after replay error = %v, want invalid", err)
+	}
+	if _, err := service.Refresh(context.Background(), refreshed.RefreshToken); !errors.Is(err, authapp.ErrInvalidRefresh) {
+		t.Fatalf("replacement refresh after replay error = %v, want invalid", err)
+	}
+}
+
 func TestLogoutRevokesOnlyTheSelectedSession(t *testing.T) {
 	store := memory.NewIdentityStore()
 	hasher := &passwordHasherStub{hash: "stored-password-hash", matches: true}
 	clock := &clockStub{now: time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)}
-	tokens := &tokenGeneratorStub{tokens: []string{"first-session-token", "second-session-token"}}
+	tokens := &tokenGeneratorStub{tokens: []string{
+		"first-access-token", "first-refresh-token",
+		"second-access-token", "second-refresh-token",
+	}}
+	ids := &idGeneratorStub{ids: []string{"user-1", "family-1", "family-2"}}
 	service := authapp.NewService(
-		store, hasher, idGeneratorStub{id: "user-1"}, tokens, clock, time.Hour,
+		store, hasher, ids, tokens, clock, time.Hour, 24*time.Hour,
 	)
 	if _, err := service.Register(context.Background(), authapp.RegisterCommand{
 		Email: "learner@example.com", Password: "correct-password",
@@ -189,16 +250,16 @@ func TestLogoutRevokesOnlyTheSelectedSession(t *testing.T) {
 		t.Fatalf("second Login() error = %v", err)
 	}
 
-	if err := service.Logout(context.Background(), first.Token); err != nil {
+	if err := service.Logout(context.Background(), first.AccessToken); err != nil {
 		t.Fatalf("Logout() error = %v", err)
 	}
-	if _, err := service.Authenticate(context.Background(), first.Token); !errors.Is(err, authapp.ErrInvalidSession) {
+	if _, err := service.Authenticate(context.Background(), first.AccessToken); !errors.Is(err, authapp.ErrInvalidSession) {
 		t.Fatalf("revoked Authenticate() error = %v", err)
 	}
-	if _, err := service.Authenticate(context.Background(), second.Token); err != nil {
+	if _, err := service.Authenticate(context.Background(), second.AccessToken); err != nil {
 		t.Fatalf("other session Authenticate() error = %v", err)
 	}
-	if err := service.Logout(context.Background(), first.Token); err != nil {
+	if err := service.Logout(context.Background(), first.AccessToken); err != nil {
 		t.Fatalf("repeated Logout() error = %v", err)
 	}
 }
@@ -207,9 +268,13 @@ func TestLogoutAllRevokesEverySessionForTheUser(t *testing.T) {
 	store := memory.NewIdentityStore()
 	hasher := &passwordHasherStub{hash: "stored-password-hash", matches: true}
 	clock := &clockStub{now: time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)}
-	tokens := &tokenGeneratorStub{tokens: []string{"first-session-token", "second-session-token"}}
+	tokens := &tokenGeneratorStub{tokens: []string{
+		"first-access-token", "first-refresh-token",
+		"second-access-token", "second-refresh-token",
+	}}
+	ids := &idGeneratorStub{ids: []string{"user-1", "family-1", "family-2"}}
 	service := authapp.NewService(
-		store, hasher, idGeneratorStub{id: "user-1"}, tokens, clock, time.Hour,
+		store, hasher, ids, tokens, clock, time.Hour, 24*time.Hour,
 	)
 	if _, err := service.Register(context.Background(), authapp.RegisterCommand{
 		Email: "learner@example.com", Password: "correct-password",
@@ -229,7 +294,7 @@ func TestLogoutAllRevokesEverySessionForTheUser(t *testing.T) {
 	if err := service.LogoutAll(context.Background(), first.User.ID()); err != nil {
 		t.Fatalf("LogoutAll() error = %v", err)
 	}
-	for _, token := range []string{first.Token, second.Token} {
+	for _, token := range []string{first.AccessToken, second.AccessToken} {
 		if _, err := service.Authenticate(context.Background(), token); !errors.Is(err, authapp.ErrInvalidSession) {
 			t.Fatalf("Authenticate() after LogoutAll() error = %v", err)
 		}
@@ -239,7 +304,7 @@ func TestLogoutAllRevokesEverySessionForTheUser(t *testing.T) {
 func newAuthService(store authapp.Store, hasher authapp.PasswordHasher) (*authapp.Service, *clockStub) {
 	clock := &clockStub{now: time.Date(2026, 9, 28, 8, 0, 0, 0, time.UTC)}
 	return authapp.NewService(
-		store, hasher, idGeneratorStub{id: "user-1"},
-		&tokenGeneratorStub{token: "raw-session-token"}, clock, time.Hour,
+		store, hasher, &idGeneratorStub{id: "user-1"},
+		&tokenGeneratorStub{tokens: []string{"raw-access-token", "raw-refresh-token"}}, clock, time.Hour, 24*time.Hour,
 	), clock
 }

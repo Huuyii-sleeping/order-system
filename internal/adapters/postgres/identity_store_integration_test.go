@@ -128,6 +128,82 @@ func TestIntegrationIdentityStore(t *testing.T) {
 			t.Fatalf("all-revoked session lookup error = %v", err)
 		}
 	})
+
+	t.Run("rotates refresh tokens and revokes a replayed family", func(t *testing.T) {
+		access, err := identity.NewSessionForFamily(
+			"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			user.ID(), "family-1", now, now.Add(time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create access session: %v", err)
+		}
+		refresh, err := identity.NewRefreshToken(
+			"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			user.ID(), "family-1", now, now.Add(24*time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create refresh token: %v", err)
+		}
+		if err := store.CreateCredentials(ctx, access, refresh); err != nil {
+			t.Fatalf("CreateCredentials() error = %v", err)
+		}
+
+		replacementAccess, err := identity.NewSessionForFamily(
+			"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			user.ID(), "family-1", now.Add(time.Minute), now.Add(2*time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create replacement access session: %v", err)
+		}
+		replacementRefresh, err := identity.NewRefreshToken(
+			"1111111111111111111111111111111111111111111111111111111111111111",
+			user.ID(), "family-1", now.Add(time.Minute), now.Add(24*time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create replacement refresh token: %v", err)
+		}
+		usedAt := now.Add(time.Minute)
+		if err := store.RotateRefreshToken(
+			ctx, refresh.TokenHash(), usedAt, replacementAccess, replacementRefresh,
+		); err != nil {
+			t.Fatalf("first RotateRefreshToken() error = %v", err)
+		}
+
+		storedOld, err := store.GetRefreshTokenByHash(ctx, refresh.TokenHash())
+		if err != nil || !storedOld.IsUsed() {
+			t.Fatalf("old refresh token = %+v, %v; want used", storedOld, err)
+		}
+		if _, err := store.GetSessionByTokenHash(ctx, replacementAccess.TokenHash(), now); err != nil {
+			t.Fatalf("replacement access lookup error = %v", err)
+		}
+
+		secondAccess, err := identity.NewSessionForFamily(
+			"2222222222222222222222222222222222222222222222222222222222222222",
+			user.ID(), "family-1", now.Add(2*time.Minute), now.Add(3*time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create second access session: %v", err)
+		}
+		secondRefresh, err := identity.NewRefreshToken(
+			"3333333333333333333333333333333333333333333333333333333333333333",
+			user.ID(), "family-1", now.Add(2*time.Minute), now.Add(24*time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create second refresh token: %v", err)
+		}
+		if err := store.RotateRefreshToken(
+			ctx, refresh.TokenHash(), usedAt.Add(time.Minute), secondAccess, secondRefresh,
+		); !errors.Is(err, identity.ErrRefreshTokenReused) {
+			t.Fatalf("replayed RotateRefreshToken() error = %v, want reused", err)
+		}
+		if _, err := store.GetSessionByTokenHash(ctx, replacementAccess.TokenHash(), now); !errors.Is(err, identity.ErrSessionNotFound) {
+			t.Fatalf("replacement access after replay error = %v, want not found", err)
+		}
+		storedReplacement, err := store.GetRefreshTokenByHash(ctx, replacementRefresh.TokenHash())
+		if err != nil || !storedReplacement.IsRevoked() {
+			t.Fatalf("replacement refresh after replay = %+v, %v; want revoked", storedReplacement, err)
+		}
+	})
 }
 
 func openMigratedIdentityTestDB(t *testing.T, ctx context.Context, databaseURL string) *sql.DB {

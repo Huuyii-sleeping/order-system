@@ -22,6 +22,9 @@ type authUseCasesStub struct {
 	loginResult     authapp.LoginResult
 	loginErr        error
 	loginCommand    authapp.LoginCommand
+	refreshResult   authapp.RefreshResult
+	refreshErr      error
+	refreshToken    string
 	userID          string
 	authErr         error
 	authToken       string
@@ -39,6 +42,11 @@ func (s *authUseCasesStub) Register(_ context.Context, command authapp.RegisterC
 func (s *authUseCasesStub) Login(_ context.Context, command authapp.LoginCommand) (authapp.LoginResult, error) {
 	s.loginCommand = command
 	return s.loginResult, s.loginErr
+}
+
+func (s *authUseCasesStub) Refresh(_ context.Context, token string) (authapp.RefreshResult, error) {
+	s.refreshToken = token
+	return s.refreshResult, s.refreshErr
 }
 
 func (s *authUseCasesStub) Authenticate(_ context.Context, token string) (string, error) {
@@ -91,7 +99,7 @@ func TestLoginReturnsBearerToken(t *testing.T) {
 	user := mustHTTPUser(t)
 	expiresAt := time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC)
 	auth := &authUseCasesStub{loginResult: authapp.LoginResult{
-		User: user, Token: "raw-session-token", ExpiresAt: expiresAt,
+		User: user, AccessToken: "raw-session-token", AccessExpiresAt: expiresAt,
 	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -118,6 +126,50 @@ func TestLoginReturnsBearerToken(t *testing.T) {
 	}
 	if body.AccessToken != "raw-session-token" || body.TokenType != "Bearer" {
 		t.Errorf("login response = %+v", body)
+	}
+	if cookie := response.Result().Cookies()[0]; cookie.Name != "refresh_token" || !cookie.HttpOnly {
+		t.Errorf("refresh cookie = %+v, want HttpOnly refresh_token", cookie)
+	}
+}
+
+func TestRefreshRotatesCookieAndReturnsOnlyAccessToken(t *testing.T) {
+	expiresAt := time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC)
+	auth := &authUseCasesStub{refreshResult: authapp.RefreshResult{
+		AccessToken: "new-access", AccessExpiresAt: expiresAt,
+		RefreshToken: "new-refresh", RefreshExpiresAt: expiresAt.Add(24 * time.Hour),
+	}}
+	request := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	request.AddCookie(&http.Cookie{Name: "refresh_token", Value: "old-refresh"})
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
+	}
+	if auth.refreshToken != "old-refresh" {
+		t.Errorf("Refresh() token = %q, want old-refresh", auth.refreshToken)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := response.Header().Get("Set-Cookie"); !bytes.Contains([]byte(got), []byte("new-refresh")) {
+		t.Errorf("Set-Cookie = %q, want rotated refresh cookie", got)
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("new-refresh")) {
+		t.Errorf("refresh token leaked in response body: %s", response.Body.String())
+	}
+}
+
+func TestRefreshRequiresCookie(t *testing.T) {
+	auth := &authUseCasesStub{}
+	request := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusUnauthorized)
 	}
 }
 

@@ -68,11 +68,53 @@ func (s *IdentityStore) GetUserByEmail(ctx context.Context, email string) (ident
 
 func (s *IdentityStore) CreateSession(ctx context.Context, session identity.Session) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, session.TokenHash(), session.UserID(), session.CreatedAt(), session.ExpiresAt())
+		INSERT INTO sessions (token_hash, user_id, family_id, created_at, expires_at)
+		VALUES ($1, $2, NULLIF($3, ''), $4, $5)
+	`, session.TokenHash(), session.UserID(), session.FamilyID(), session.CreatedAt(), session.ExpiresAt())
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
+	}
+	return nil
+}
+
+func (s *IdentityStore) CreateRefreshToken(ctx context.Context, token identity.RefreshToken) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO refresh_tokens (token_hash, user_id, family_id, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, token.TokenHash(), token.UserID(), token.FamilyID(), token.CreatedAt(), token.ExpiresAt())
+	if err != nil {
+		return fmt.Errorf("insert refresh token: %w", err)
+	}
+	return nil
+}
+
+// CreateCredentials 在一个事务中写入登录产生的 Access Session 和 Refresh Token。
+// 不能先写其中一个再写另一个，否则中途失败会留下半套凭证。
+func (s *IdentityStore) CreateCredentials(
+	ctx context.Context,
+	session identity.Session,
+	refresh identity.RefreshToken,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin credential transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (token_hash, user_id, family_id, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, session.TokenHash(), session.UserID(), session.FamilyID(), session.CreatedAt(), session.ExpiresAt()); err != nil {
+		return fmt.Errorf("insert access session: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO refresh_tokens (token_hash, user_id, family_id, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, refresh.TokenHash(), refresh.UserID(), refresh.FamilyID(), refresh.CreatedAt(), refresh.ExpiresAt()); err != nil {
+		return fmt.Errorf("insert refresh token: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit credentials: %w", err)
 	}
 	return nil
 }
@@ -85,15 +127,16 @@ func (s *IdentityStore) GetSessionByTokenHash(
 	var record struct {
 		tokenHash string
 		userID    string
+		familyID  sql.NullString
 		createdAt time.Time
 		expiresAt time.Time
 	}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT token_hash, user_id, created_at, expires_at
+		SELECT token_hash, user_id, family_id, created_at, expires_at
 		FROM sessions
 		WHERE token_hash = $1 AND expires_at > $2
 	`, tokenHash, now).Scan(
-		&record.tokenHash, &record.userID, &record.createdAt, &record.expiresAt,
+		&record.tokenHash, &record.userID, &record.familyID, &record.createdAt, &record.expiresAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return identity.Session{}, identity.ErrSessionNotFound
@@ -102,8 +145,8 @@ func (s *IdentityStore) GetSessionByTokenHash(
 		return identity.Session{}, fmt.Errorf("select session: %w", err)
 	}
 
-	session, err := identity.RestoreSession(
-		record.tokenHash, record.userID, record.createdAt, record.expiresAt,
+	session, err := identity.RestoreSessionForFamily(
+		record.tokenHash, record.userID, record.familyID.String, record.createdAt, record.expiresAt,
 	)
 	if err != nil {
 		return identity.Session{}, fmt.Errorf("restore session: %w", err)
@@ -111,20 +154,174 @@ func (s *IdentityStore) GetSessionByTokenHash(
 	return session, nil
 }
 
+func (s *IdentityStore) GetRefreshTokenByHash(
+	ctx context.Context,
+	tokenHash string,
+) (identity.RefreshToken, error) {
+	var record struct {
+		tokenHash string
+		userID    string
+		familyID  string
+		createdAt time.Time
+		expiresAt time.Time
+		usedAt    sql.NullTime
+		revokedAt sql.NullTime
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT token_hash, user_id, family_id, created_at, expires_at, used_at, revoked_at
+		FROM refresh_tokens
+		WHERE token_hash = $1
+	`, tokenHash).Scan(
+		&record.tokenHash, &record.userID, &record.familyID, &record.createdAt,
+		&record.expiresAt, &record.usedAt, &record.revokedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return identity.RefreshToken{}, identity.ErrRefreshTokenNotFound
+	}
+	if err != nil {
+		return identity.RefreshToken{}, fmt.Errorf(`select refresh token: %w`, err)
+	}
+
+	var usedAt, revokedAt time.Time
+	if record.usedAt.Valid {
+		usedAt = record.usedAt.Time
+	}
+	if record.revokedAt.Valid {
+		revokedAt = record.revokedAt.Time
+	}
+	token, err := identity.RestoreRefreshToken(
+		record.tokenHash, record.userID, record.familyID, record.createdAt,
+		record.expiresAt, usedAt, revokedAt,
+	)
+	if err != nil {
+		return identity.RefreshToken{}, fmt.Errorf(`restore refresh token: %w`, err)
+	}
+	return token, nil
+}
+
+// RotateRefreshToken 使用行锁串行化同一个 Refresh Token 的并发消费。
+// 第一个请求把 used_at 写入并创建替代凭证；后续请求发现已使用，
+// 立即撤销整个 family，阻止已经泄露的新 Token 继续工作。
+func (s *IdentityStore) RotateRefreshToken(
+	ctx context.Context,
+	tokenHash string,
+	usedAt time.Time,
+	access identity.Session,
+	replacement identity.RefreshToken,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf(`begin refresh transaction: %w`, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var record struct {
+		familyID  string
+		usedAt    sql.NullTime
+		revokedAt sql.NullTime
+	}
+	err = tx.QueryRowContext(ctx, `
+		SELECT family_id, used_at, revoked_at
+		FROM refresh_tokens
+		WHERE token_hash = $1
+		FOR UPDATE
+	`, tokenHash).Scan(&record.familyID, &record.usedAt, &record.revokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return identity.ErrRefreshTokenNotFound
+	}
+	if err != nil {
+		return fmt.Errorf(`lock refresh token: %w`, err)
+	}
+	if record.revokedAt.Valid {
+		return identity.ErrRefreshTokenRevoked
+	}
+	if record.usedAt.Valid {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM sessions WHERE family_id = $1
+		`, record.familyID); err != nil {
+			return fmt.Errorf(`revoke reused token family: %w`, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE refresh_tokens
+			SET revoked_at = COALESCE(revoked_at, $2)
+			WHERE family_id = $1
+		`, record.familyID, usedAt); err != nil {
+			return fmt.Errorf(`mark reused token family revoked: %w`, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf(`commit reused token revocation: %w`, err)
+		}
+		return identity.ErrRefreshTokenReused
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE refresh_tokens SET used_at = $1 WHERE token_hash = $2
+	`, usedAt, tokenHash); err != nil {
+		return fmt.Errorf(`mark refresh token used: %w`, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (token_hash, user_id, family_id, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, access.TokenHash(), access.UserID(), access.FamilyID(), access.CreatedAt(), access.ExpiresAt()); err != nil {
+		return fmt.Errorf(`insert refreshed access session: %w`, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO refresh_tokens (token_hash, user_id, family_id, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, replacement.TokenHash(), replacement.UserID(), replacement.FamilyID(), replacement.CreatedAt(), replacement.ExpiresAt()); err != nil {
+		return fmt.Errorf(`insert replacement refresh token: %w`, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf(`commit refresh rotation: %w`, err)
+	}
+	return nil
+}
+
 func (s *IdentityStore) RevokeSession(ctx context.Context, tokenHash string) error {
-	if _, err := s.db.ExecContext(ctx, `
-		DELETE FROM sessions WHERE token_hash = $1
-	`, tokenHash); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session revocation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var familyID sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT family_id FROM sessions WHERE token_hash = $1`, tokenHash).Scan(&familyID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("find session: %w", err)
+	}
+	if familyID.Valid {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE family_id = $1`, familyID.String); err != nil {
+			return fmt.Errorf("delete session family: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE family_id = $1`, familyID.String); err != nil {
+			return fmt.Errorf("delete refresh token family: %w", err)
+		}
+	} else if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHash); err != nil {
 		return fmt.Errorf("delete session: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session revocation: %w", err)
 	}
 	return nil
 }
 
 func (s *IdentityStore) RevokeAllSessions(ctx context.Context, userID string) error {
-	if _, err := s.db.ExecContext(ctx, `
-		DELETE FROM sessions WHERE user_id = $1
-	`, userID); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin user session revocation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("delete user sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("delete user refresh tokens: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit user session revocation: %w", err)
 	}
 	return nil
 }

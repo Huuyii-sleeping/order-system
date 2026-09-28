@@ -23,6 +23,8 @@ func TestLoad(t *testing.T) {
 		shutdownTimeout string
 		storageDriver   string
 		databaseURL     string
+		accessTokenTTL  string
+		refreshTokenTTL string
 
 		want              config.Config
 		wantErrorContains string
@@ -37,7 +39,22 @@ func TestLoad(t *testing.T) {
 				HTTPAddr:        ":8080",
 				ShutdownTimeout: 10 * time.Second,
 				StorageDriver:   config.StorageMemory,
-				SessionTTL:      24 * time.Hour,
+				AccessTokenTTL:  15 * time.Minute,
+				RefreshTokenTTL: 30 * 24 * time.Hour,
+				BcryptCost:      12,
+			},
+		},
+		{
+			name:            "environment variables override token lifetimes",
+			accessTokenTTL:  "5m",
+			refreshTokenTTL: "12h",
+			want: config.Config{
+				AppName:         "order-system",
+				HTTPAddr:        ":8080",
+				ShutdownTimeout: 10 * time.Second,
+				StorageDriver:   config.StorageMemory,
+				AccessTokenTTL:  5 * time.Minute,
+				RefreshTokenTTL: 12 * time.Hour,
 				BcryptCost:      12,
 			},
 		},
@@ -54,7 +71,8 @@ func TestLoad(t *testing.T) {
 				ShutdownTimeout: 30 * time.Second,
 				StorageDriver:   config.StoragePostgres,
 				DatabaseURL:     "postgres://localhost/order_system",
-				SessionTTL:      24 * time.Hour,
+				AccessTokenTTL:  15 * time.Minute,
+				RefreshTokenTTL: 30 * 24 * time.Hour,
 				BcryptCost:      12,
 			},
 		},
@@ -94,6 +112,8 @@ func TestLoad(t *testing.T) {
 			t.Setenv("SHUTDOWN_TIMEOUT", tt.shutdownTimeout)
 			t.Setenv("STORAGE_DRIVER", tt.storageDriver)
 			t.Setenv("DATABASE_URL", tt.databaseURL)
+			t.Setenv("ACCESS_TOKEN_TTL", tt.accessTokenTTL)
+			t.Setenv("REFRESH_TOKEN_TTL", tt.refreshTokenTTL)
 
 			got, err := config.Load()
 
