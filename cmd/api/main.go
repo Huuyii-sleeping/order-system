@@ -39,7 +39,20 @@ func main() {
 	}
 	defer services.Close()
 
-	router := httpapi.NewRouter(services.Catalog, services.Auth, services.Orders)
+	router := httpapi.NewRouterWithAuthSecurity(
+		services.Catalog,
+		services.Auth,
+		services.Orders,
+		httpapi.AuthSecurityConfig{
+			SecureCookies: cfg.SecureCookies,
+			LoginLimiter: httpapi.NewFixedWindowRateLimiter(
+				cfg.LoginRateLimit, cfg.AuthRateWindow,
+			),
+			RefreshLimiter: httpapi.NewFixedWindowRateLimiter(
+				cfg.RefreshRateLimit, cfg.AuthRateWindow,
+			),
+		},
+	)
 
 	// 中间件从内向外组合：
 	//

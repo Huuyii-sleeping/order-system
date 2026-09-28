@@ -44,6 +44,12 @@ type SessionAuthenticator interface {
 	Authenticate(context.Context, string) (string, error)
 }
 
+type AuthSecurityConfig struct {
+	SecureCookies  bool
+	LoginLimiter   RequestRateLimiter
+	RefreshLimiter RequestRateLimiter
+}
+
 // NewRouter 创建 API 使用的 HTTP 路由。
 //
 // 返回 http.Handler 而不是具体的 *http.ServeMux，
@@ -53,6 +59,17 @@ func NewRouter(
 	catalogQueries CatalogQueries,
 	authUseCases AuthUseCases,
 	orderUseCases OrderUseCases,
+) http.Handler {
+	return NewRouterWithAuthSecurity(
+		catalogQueries, authUseCases, orderUseCases, AuthSecurityConfig{},
+	)
+}
+
+func NewRouterWithAuthSecurity(
+	catalogQueries CatalogQueries,
+	authUseCases AuthUseCases,
+	orderUseCases OrderUseCases,
+	security AuthSecurityConfig,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -64,10 +81,14 @@ func NewRouter(
 	mux.HandleFunc("GET /products", catalogHandler.list)
 	mux.HandleFunc("GET /products/{productID}", catalogHandler.getByID)
 
-	authHandler := newAuthHandler(authUseCases)
+	authHandler := newAuthHandler(authUseCases, security.SecureCookies)
 	mux.HandleFunc("POST /auth/register", authHandler.register)
-	mux.HandleFunc("POST /auth/login", authHandler.login)
-	mux.HandleFunc("POST /auth/refresh", authHandler.refresh)
+	mux.Handle("POST /auth/login", WithRateLimit(
+		security.LoginLimiter, http.HandlerFunc(authHandler.login),
+	))
+	mux.Handle("POST /auth/refresh", WithRateLimit(
+		security.RefreshLimiter, http.HandlerFunc(authHandler.refresh),
+	))
 	mux.Handle("POST /auth/logout", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logout)))
 	mux.Handle("POST /auth/logout-all", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logoutAll)))
 

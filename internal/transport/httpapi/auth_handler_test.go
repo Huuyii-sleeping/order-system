@@ -100,6 +100,7 @@ func TestLoginReturnsBearerToken(t *testing.T) {
 	expiresAt := time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC)
 	auth := &authUseCasesStub{loginResult: authapp.LoginResult{
 		User: user, AccessToken: "raw-session-token", AccessExpiresAt: expiresAt,
+		RefreshToken: "raw-refresh-token", RefreshExpiresAt: expiresAt.Add(24 * time.Hour),
 	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -127,8 +128,42 @@ func TestLoginReturnsBearerToken(t *testing.T) {
 	if body.AccessToken != "raw-session-token" || body.TokenType != "Bearer" {
 		t.Errorf("login response = %+v", body)
 	}
-	if cookie := response.Result().Cookies()[0]; cookie.Name != "refresh_token" || !cookie.HttpOnly {
-		t.Errorf("refresh cookie = %+v, want HttpOnly refresh_token", cookie)
+	cookies := response.Result().Cookies()
+	if len(cookies) != 2 {
+		t.Fatalf("cookies = %+v, want refresh and CSRF cookies", cookies)
+	}
+	if cookie := cookies[0]; cookie.Name != "refresh_token" || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
+		t.Errorf("refresh cookie = %+v, want HttpOnly strict refresh_token", cookie)
+	}
+	if cookie := cookies[1]; cookie.Name != "csrf_token" || cookie.HttpOnly || cookie.Value == "" || cookie.Path != "/" {
+		t.Errorf("CSRF cookie = %+v, want readable non-empty csrf_token", cookie)
+	}
+}
+
+func TestLoginCanSetSecureAuthCookies(t *testing.T) {
+	user := mustHTTPUser(t)
+	expiresAt := time.Now().Add(time.Hour)
+	auth := &authUseCasesStub{loginResult: authapp.LoginResult{
+		User: user, AccessToken: "access", AccessExpiresAt: expiresAt,
+		RefreshToken: "refresh", RefreshExpiresAt: expiresAt,
+	}}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/auth/login",
+		bytes.NewBufferString("{\"email\":\"learner@example.com\",\"password\":\"correct-horse\"}"),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouterWithAuthSecurity(
+		catalogQueriesStub{}, auth, nil,
+		httpapi.AuthSecurityConfig{SecureCookies: true},
+	).ServeHTTP(response, request)
+
+	for _, cookie := range response.Result().Cookies() {
+		if !cookie.Secure {
+			t.Errorf("cookie %q Secure = false, want true", cookie.Name)
+		}
 	}
 }
 
@@ -140,6 +175,8 @@ func TestRefreshRotatesCookieAndReturnsOnlyAccessToken(t *testing.T) {
 	}}
 	request := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 	request.AddCookie(&http.Cookie{Name: "refresh_token", Value: "old-refresh"})
+	request.AddCookie(&http.Cookie{Name: "csrf_token", Value: "csrf-value"})
+	request.Header.Set(httpapi.CSRFTokenHeader, "csrf-value")
 	response := httptest.NewRecorder()
 
 	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
@@ -161,9 +198,27 @@ func TestRefreshRotatesCookieAndReturnsOnlyAccessToken(t *testing.T) {
 	}
 }
 
-func TestRefreshRequiresCookie(t *testing.T) {
+func TestRefreshRequiresMatchingCSRFToken(t *testing.T) {
 	auth := &authUseCasesStub{}
 	request := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	request.AddCookie(&http.Cookie{Name: "refresh_token", Value: "refresh-value"})
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusForbidden)
+	}
+	if auth.refreshToken != "" {
+		t.Errorf("Refresh() was called with %q despite failed CSRF validation", auth.refreshToken)
+	}
+}
+
+func TestRefreshRequiresRefreshCookieAfterCSRFSucceeds(t *testing.T) {
+	auth := &authUseCasesStub{}
+	request := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	request.AddCookie(&http.Cookie{Name: "csrf_token", Value: "csrf-value"})
+	request.Header.Set(httpapi.CSRFTokenHeader, "csrf-value")
 	response := httptest.NewRecorder()
 
 	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)

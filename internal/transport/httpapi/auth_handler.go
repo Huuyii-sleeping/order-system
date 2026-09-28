@@ -10,11 +10,12 @@ import (
 )
 
 type authHandler struct {
-	useCases AuthUseCases
+	useCases     AuthUseCases
+	secureCookie bool
 }
 
-func newAuthHandler(useCases AuthUseCases) *authHandler {
-	return &authHandler{useCases: useCases}
+func newAuthHandler(useCases AuthUseCases, secureCookie bool) *authHandler {
+	return &authHandler{useCases: useCases, secureCookie: secureCookie}
 }
 
 type credentialsRequest struct {
@@ -37,17 +38,31 @@ type loginResponse struct {
 
 const refreshCookieName = "refresh_token"
 
-func setRefreshCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+func setRefreshCookie(w http.ResponseWriter, token string, expiresAt time.Time, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name: refreshCookieName, Value: token, Path: "/auth",
-		Expires: expiresAt, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Expires: expiresAt, HttpOnly: true, Secure: secure,
+		SameSite: http.SameSiteStrictMode,
 	})
 }
 
-func clearRefreshCookie(w http.ResponseWriter) {
+func setCSRFCookie(w http.ResponseWriter, token string, expiresAt time.Time, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		// CSRF Cookie 必须让根路径页面能够读取，SPA 才能把它复制到 Header。
+		// 它不是认证凭证，因此不设置 HttpOnly。
+		Name: csrfCookieName, Value: token, Path: "/",
+		Expires: expiresAt, Secure: secure, SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearAuthCookies(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name: refreshCookieName, Value: "", Path: "/auth", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name: csrfCookieName, Value: "", Path: "/", MaxAge: -1,
+		Secure: secure, SameSite: http.SameSiteStrictMode,
 	})
 }
 
@@ -83,6 +98,11 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	csrfToken, err := newCSRFToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
 
 	result, err := h.useCases.Login(r.Context(), authapp.LoginCommand{
 		Email: request.Email, Password: request.Password,
@@ -99,7 +119,8 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 	// Access Token 通过响应体返回；Refresh Token 只通过 HttpOnly Cookie 返回，
 	// 浏览器脚本无法直接读取长期凭证。
 	w.Header().Set("Cache-Control", "no-store")
-	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt)
+	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt, h.secureCookie)
+	setCSRFCookie(w, csrfToken, result.RefreshExpiresAt, h.secureCookie)
 	_ = writeJSON(w, http.StatusOK, loginResponse{
 		AccessToken: result.AccessToken,
 		TokenType:   "Bearer",
@@ -109,6 +130,16 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *authHandler) refresh(w http.ResponseWriter, r *http.Request) {
+	if !validCSRFToken(r) {
+		writeError(w, http.StatusForbidden, "invalid or missing CSRF token")
+		return
+	}
+	csrfToken, err := newCSRFToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
 	cookie, err := r.Cookie(refreshCookieName)
 	if err != nil || cookie.Value == "" {
 		writeError(w, http.StatusUnauthorized, "invalid or missing refresh token")
@@ -117,7 +148,7 @@ func (h *authHandler) refresh(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.useCases.Refresh(r.Context(), cookie.Value)
 	if errors.Is(err, authapp.ErrInvalidRefresh) {
-		clearRefreshCookie(w)
+		clearAuthCookies(w, h.secureCookie)
 		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		return
 	}
@@ -126,7 +157,8 @@ func (h *authHandler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt)
+	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt, h.secureCookie)
+	setCSRFCookie(w, csrfToken, result.RefreshExpiresAt, h.secureCookie)
 	w.Header().Set("Cache-Control", "no-store")
 	response := struct {
 		AccessToken string    `json:"access_token"`
@@ -156,7 +188,7 @@ func (h *authHandler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clearRefreshCookie(w)
+	clearAuthCookies(w, h.secureCookie)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -176,7 +208,7 @@ func (h *authHandler) logoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clearRefreshCookie(w)
+	clearAuthCookies(w, h.secureCookie)
 	w.WriteHeader(http.StatusNoContent)
 }
 

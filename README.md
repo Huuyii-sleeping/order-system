@@ -58,7 +58,7 @@ curl -i http://127.0.0.1:8080/auth/register \
 ```
 
 登录并从响应中取得 `access_token`。Refresh Token 会由服务端写入
-`HttpOnly` Cookie，客户端不需要读取它：
+`HttpOnly` Cookie；同时还会写入前端可读取的 `csrf_token` Cookie：
 
 ```bash
 curl -i http://127.0.0.1:8080/auth/login \
@@ -93,11 +93,16 @@ Access Token 过期后，浏览器携带登录时收到的 Cookie 调用刷新�
 
 ```bash
 curl -i -X POST http://127.0.0.1:8080/auth/refresh \
-  -H 'Cookie: refresh_token=<refresh-token>'
+  -H 'Cookie: refresh_token=<refresh-token>; csrf_token=<csrf-token>' \
+  -H 'X-CSRF-Token: <csrf-token>'
 ```
 
 每次刷新都会轮换 Refresh Token。旧 Refresh Token 再次使用会被识别为重放，
 并撤销同一个凭证家族中的 Access Session 和 Refresh Token。
+
+登录和刷新接口默认按客户端连接地址进行单实例限流，超限返回
+`429 Too Many Requests` 和 `Retry-After`。HTTPS 部署必须将
+`SECURE_COOKIES` 设置为 `true`，本地 HTTP 开发保持 `false`。
 
 相同参数和 `Idempotency-Key` 重试时会返回原订单，不会重复扣库存。
 同一个用户用同一个 Key 携带不同参数时返回 `409 Conflict`。不同用户的

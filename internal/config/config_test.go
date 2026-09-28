@@ -18,13 +18,17 @@ func TestLoad(t *testing.T) {
 
 		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
-		appName         string
-		httpAddr        string
-		shutdownTimeout string
-		storageDriver   string
-		databaseURL     string
-		accessTokenTTL  string
-		refreshTokenTTL string
+		appName          string
+		httpAddr         string
+		shutdownTimeout  string
+		storageDriver    string
+		databaseURL      string
+		accessTokenTTL   string
+		refreshTokenTTL  string
+		secureCookies    string
+		authRateWindow   string
+		loginRateLimit   string
+		refreshRateLimit string
 
 		want              config.Config
 		wantErrorContains string
@@ -35,13 +39,16 @@ func TestLoad(t *testing.T) {
 			httpAddr:        "",
 			shutdownTimeout: "",
 			want: config.Config{
-				AppName:         "order-system",
-				HTTPAddr:        ":8080",
-				ShutdownTimeout: 10 * time.Second,
-				StorageDriver:   config.StorageMemory,
-				AccessTokenTTL:  15 * time.Minute,
-				RefreshTokenTTL: 30 * 24 * time.Hour,
-				BcryptCost:      12,
+				AppName:          "order-system",
+				HTTPAddr:         ":8080",
+				ShutdownTimeout:  10 * time.Second,
+				StorageDriver:    config.StorageMemory,
+				AccessTokenTTL:   15 * time.Minute,
+				RefreshTokenTTL:  30 * 24 * time.Hour,
+				AuthRateWindow:   time.Minute,
+				LoginRateLimit:   10,
+				RefreshRateLimit: 30,
+				BcryptCost:       12,
 			},
 		},
 		{
@@ -49,13 +56,16 @@ func TestLoad(t *testing.T) {
 			accessTokenTTL:  "5m",
 			refreshTokenTTL: "12h",
 			want: config.Config{
-				AppName:         "order-system",
-				HTTPAddr:        ":8080",
-				ShutdownTimeout: 10 * time.Second,
-				StorageDriver:   config.StorageMemory,
-				AccessTokenTTL:  5 * time.Minute,
-				RefreshTokenTTL: 12 * time.Hour,
-				BcryptCost:      12,
+				AppName:          "order-system",
+				HTTPAddr:         ":8080",
+				ShutdownTimeout:  10 * time.Second,
+				StorageDriver:    config.StorageMemory,
+				AccessTokenTTL:   5 * time.Minute,
+				RefreshTokenTTL:  12 * time.Hour,
+				AuthRateWindow:   time.Minute,
+				LoginRateLimit:   10,
+				RefreshRateLimit: 30,
+				BcryptCost:       12,
 			},
 		},
 		{
@@ -66,14 +76,37 @@ func TestLoad(t *testing.T) {
 			storageDriver:   config.StoragePostgres,
 			databaseURL:     "postgres://localhost/order_system",
 			want: config.Config{
-				AppName:         "checkout-service",
-				HTTPAddr:        ":9090",
-				ShutdownTimeout: 30 * time.Second,
-				StorageDriver:   config.StoragePostgres,
-				DatabaseURL:     "postgres://localhost/order_system",
-				AccessTokenTTL:  15 * time.Minute,
-				RefreshTokenTTL: 30 * 24 * time.Hour,
-				BcryptCost:      12,
+				AppName:          "checkout-service",
+				HTTPAddr:         ":9090",
+				ShutdownTimeout:  30 * time.Second,
+				StorageDriver:    config.StoragePostgres,
+				DatabaseURL:      "postgres://localhost/order_system",
+				AccessTokenTTL:   15 * time.Minute,
+				RefreshTokenTTL:  30 * 24 * time.Hour,
+				AuthRateWindow:   time.Minute,
+				LoginRateLimit:   10,
+				RefreshRateLimit: 30,
+				BcryptCost:       12,
+			},
+		},
+		{
+			name:             "environment variables override auth security",
+			secureCookies:    "true",
+			authRateWindow:   "30s",
+			loginRateLimit:   "4",
+			refreshRateLimit: "12",
+			want: config.Config{
+				AppName:          "order-system",
+				HTTPAddr:         ":8080",
+				ShutdownTimeout:  10 * time.Second,
+				StorageDriver:    config.StorageMemory,
+				AccessTokenTTL:   15 * time.Minute,
+				RefreshTokenTTL:  30 * 24 * time.Hour,
+				SecureCookies:    true,
+				AuthRateWindow:   30 * time.Second,
+				LoginRateLimit:   4,
+				RefreshRateLimit: 12,
+				BcryptCost:       12,
 			},
 		},
 		{
@@ -101,6 +134,21 @@ func TestLoad(t *testing.T) {
 			storageDriver:     config.StoragePostgres,
 			wantErrorContains: "DATABASE_URL is required",
 		},
+		{
+			name:              "rejects invalid secure cookie flag",
+			secureCookies:     "sometimes",
+			wantErrorContains: "parse SECURE_COOKIES",
+		},
+		{
+			name:              "rejects zero login rate limit",
+			loginRateLimit:    "0",
+			wantErrorContains: "LOGIN_RATE_LIMIT",
+		},
+		{
+			name:              "rejects invalid refresh rate limit",
+			refreshRateLimit:  "many",
+			wantErrorContains: "parse REFRESH_RATE_LIMIT",
+		},
 	}
 
 	for _, tt := range tests {
@@ -114,6 +162,10 @@ func TestLoad(t *testing.T) {
 			t.Setenv("DATABASE_URL", tt.databaseURL)
 			t.Setenv("ACCESS_TOKEN_TTL", tt.accessTokenTTL)
 			t.Setenv("REFRESH_TOKEN_TTL", tt.refreshTokenTTL)
+			t.Setenv("SECURE_COOKIES", tt.secureCookies)
+			t.Setenv("AUTH_RATE_WINDOW", tt.authRateWindow)
+			t.Setenv("LOGIN_RATE_LIMIT", tt.loginRateLimit)
+			t.Setenv("REFRESH_RATE_LIMIT", tt.refreshRateLimit)
 
 			got, err := config.Load()
 
