@@ -11,6 +11,9 @@ import (
 const (
 	StorageMemory   = "memory"
 	StoragePostgres = "postgres"
+
+	MessageDirect = "direct"
+	MessageKafka  = "kafka"
 )
 
 type Config struct {
@@ -23,6 +26,11 @@ type Config struct {
 
 	StorageDriver string
 	DatabaseURL   string
+
+	MessageDriver      string
+	KafkaBrokers       string
+	KafkaConsumerGroup string
+	KafkaConsumerRetry time.Duration
 
 	AccessTokenTTL   time.Duration
 	RefreshTokenTTL  time.Duration
@@ -53,6 +61,10 @@ func Load() (Config, error) {
 		ReadinessTimeout:     2 * time.Second,
 		StorageDriver:        strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
 		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		MessageDriver:        strings.ToLower(envOrDefault("MESSAGE_DRIVER", MessageDirect)),
+		KafkaBrokers:         os.Getenv("KAFKA_BROKERS"),
+		KafkaConsumerGroup:   envOrDefault("KAFKA_CONSUMER_GROUP", "order-system-payments-v1"),
+		KafkaConsumerRetry:   time.Second,
 		AccessTokenTTL:       15 * time.Minute,
 		RefreshTokenTTL:      30 * 24 * time.Hour,
 		SecureCookies:        false,
@@ -81,6 +93,23 @@ func Load() (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("unsupported STORAGE_DRIVER %q", cfg.StorageDriver)
 	}
+	switch cfg.MessageDriver {
+	case MessageDirect:
+	case MessageKafka:
+		// Kafka offset 和 Inbox 事务之间仍可能发生重复投递，因此 Kafka 模式
+		// 必须使用可跨进程、跨重启保存幂等记录的 PostgreSQL。
+		if cfg.StorageDriver != StoragePostgres {
+			return Config{}, fmt.Errorf("MESSAGE_DRIVER %q requires STORAGE_DRIVER %q", MessageKafka, StoragePostgres)
+		}
+		if len(KafkaBrokerList(cfg.KafkaBrokers)) == 0 {
+			return Config{}, fmt.Errorf("KAFKA_BROKERS is required when MESSAGE_DRIVER is %q", MessageKafka)
+		}
+		if strings.TrimSpace(cfg.KafkaConsumerGroup) == "" {
+			return Config{}, fmt.Errorf("KAFKA_CONSUMER_GROUP is required when MESSAGE_DRIVER is %q", MessageKafka)
+		}
+	default:
+		return Config{}, fmt.Errorf("unsupported MESSAGE_DRIVER %q", cfg.MessageDriver)
+	}
 
 	for _, setting := range []struct {
 		name   string
@@ -99,6 +128,7 @@ func Load() (Config, error) {
 		{name: "PAYMENT_LEASE_DURATION", target: &cfg.PaymentLeaseDuration},
 		{name: "PAYMENT_RETRY_BASE", target: &cfg.PaymentRetryBase},
 		{name: "PAYMENT_RETRY_MAX", target: &cfg.PaymentRetryMax},
+		{name: "KAFKA_CONSUMER_RETRY", target: &cfg.KafkaConsumerRetry},
 	} {
 		if err := loadPositiveDuration(setting.name, setting.target); err != nil {
 			return Config{}, err
@@ -142,6 +172,17 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func KafkaBrokerList(value string) []string {
+	parts := strings.Split(value, ",")
+	brokers := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if broker := strings.TrimSpace(part); broker != "" {
+			brokers = append(brokers, broker)
+		}
+	}
+	return brokers
 }
 
 func loadPositiveDuration(name string, target *time.Duration) error {

@@ -88,7 +88,8 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/application/event/`：保存生产者与消费者共同依赖的版本化集成事件契约。
 - `internal/adapters/memory/`：提供默认的进程内存实现。
 - `internal/adapters/postgres/`：提供连接池、订单、Outbox、Inbox、支付任务和迁移实现。
-- `internal/adapters/messaging/`：提供异步消息适配器，当前用进程内路由模拟 Broker 投递。
+- `internal/adapters/messaging/`：提供进程内和 Kafka 两种消息适配器，负责 Record
+  信封、生产确认、消费者组和 offset 提交。
 - `internal/adapters/paymentprovider/`：提供带稳定幂等键的模拟第三方支付适配器。
 - `internal/application/outbox/`：提供 Outbox 消息契约、租约认领、重试和 Worker 生命周期。
 - `internal/application/payment/`：提供 Inbox 消费幂等、支付任务和第三方调用 Worker。

@@ -32,7 +32,7 @@ type Services struct {
 	PaymentTasks    paymentapp.TaskStore
 	PaymentProvider paymentapp.Provider
 
-	readiness dependencyPinger
+	readiness []dependencyPinger
 	closer    io.Closer
 }
 
@@ -49,7 +49,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		paymentapp.Store
 		paymentapp.TaskStore
 	}
-	var readiness dependencyPinger
+	var readiness []dependencyPinger
 	var closer io.Closer
 
 	switch cfg.StorageDriver {
@@ -79,7 +79,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			return nil, err
 		}
 		closer = db
-		readiness = db
+		readiness = append(readiness, db)
 		products = postgres.NewCatalogRepository(db)
 		identities = postgres.NewIdentityStore(db)
 		orders = postgres.NewOrderStore(db)
@@ -119,14 +119,23 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	}, nil
 }
 
+// AddReadinessDependency 把启动后新增的外部依赖纳入 /readyz。
+// 例如 Kafka 模式下，数据库和 Broker 任一不可用都不应继续接收新业务流量。
+func (s *Services) AddReadinessDependency(dependency interface {
+	PingContext(context.Context) error
+}) {
+	if dependency != nil {
+		s.readiness = append(s.readiness, dependency)
+	}
+}
+
 // CheckReadiness 检查当前实例处理业务请求所依赖的外部资源。
 // 内存模式没有外部依赖，因此直接就绪；PostgreSQL 模式会实际 Ping 连接池。
 func (s *Services) CheckReadiness(ctx context.Context) error {
-	if s.readiness == nil {
-		return nil
-	}
-	if err := s.readiness.PingContext(ctx); err != nil {
-		return fmt.Errorf("check storage readiness: %w", err)
+	for _, dependency := range s.readiness {
+		if err := dependency.PingContext(ctx); err != nil {
+			return fmt.Errorf("check dependency readiness: %w", err)
+		}
 	}
 	return nil
 }

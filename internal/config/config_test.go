@@ -40,6 +40,10 @@ func TestLoad(t *testing.T) {
 		paymentLeaseDuration string
 		paymentRetryBase     string
 		paymentRetryMax      string
+		messageDriver        string
+		kafkaBrokers         string
+		kafkaConsumerGroup   string
+		kafkaConsumerRetry   string
 
 		want              config.Config
 		wantErrorContains string
@@ -216,6 +220,28 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name:               "configures kafka messaging with postgres",
+			storageDriver:      config.StoragePostgres,
+			databaseURL:        "postgres://localhost/order_system",
+			messageDriver:      config.MessageKafka,
+			kafkaBrokers:       " broker-a:9092,broker-b:9092 ",
+			kafkaConsumerGroup: "payments-test",
+			kafkaConsumerRetry: "250ms",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				ShutdownTimeout: 10 * time.Second, ReadinessTimeout: 2 * time.Second,
+				StorageDriver: config.StoragePostgres, DatabaseURL: "postgres://localhost/order_system",
+				MessageDriver: config.MessageKafka, KafkaBrokers: " broker-a:9092,broker-b:9092 ",
+				KafkaConsumerGroup: "payments-test", KafkaConsumerRetry: 250 * time.Millisecond,
+				AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 30 * 24 * time.Hour,
+				AuthRateWindow: time.Minute, LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second, OutboxRetryMax: time.Minute,
+				PaymentPollInterval: time.Second, PaymentBatchSize: 10,
+				PaymentLeaseDuration: 30 * time.Second, PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
+			},
+		},
+		{
 			name:              "rejects an invalid shutdown timeout",
 			shutdownTimeout:   "ten-seconds",
 			wantErrorContains: "parse SHUTDOWN_TIMEOUT",
@@ -282,6 +308,24 @@ func TestLoad(t *testing.T) {
 			paymentRetryMax:   "5s",
 			wantErrorContains: "PAYMENT_RETRY_MAX",
 		},
+		{
+			name:              "rejects unsupported message driver",
+			messageDriver:     "rabbitmq",
+			wantErrorContains: "unsupported MESSAGE_DRIVER",
+		},
+		{
+			name:              "kafka requires postgres storage",
+			messageDriver:     config.MessageKafka,
+			kafkaBrokers:      "127.0.0.1:9092",
+			wantErrorContains: "requires STORAGE_DRIVER",
+		},
+		{
+			name:              "kafka requires brokers",
+			storageDriver:     config.StoragePostgres,
+			databaseURL:       "postgres://localhost/order_system",
+			messageDriver:     config.MessageKafka,
+			wantErrorContains: "KAFKA_BROKERS",
+		},
 	}
 
 	for _, tt := range tests {
@@ -310,6 +354,10 @@ func TestLoad(t *testing.T) {
 			t.Setenv("PAYMENT_LEASE_DURATION", tt.paymentLeaseDuration)
 			t.Setenv("PAYMENT_RETRY_BASE", tt.paymentRetryBase)
 			t.Setenv("PAYMENT_RETRY_MAX", tt.paymentRetryMax)
+			t.Setenv("MESSAGE_DRIVER", tt.messageDriver)
+			t.Setenv("KAFKA_BROKERS", tt.kafkaBrokers)
+			t.Setenv("KAFKA_CONSUMER_GROUP", tt.kafkaConsumerGroup)
+			t.Setenv("KAFKA_CONSUMER_RETRY", tt.kafkaConsumerRetry)
 
 			got, err := config.Load()
 
@@ -337,8 +385,14 @@ func TestLoad(t *testing.T) {
 				t.Fatalf("Load() unexpected error = %v", err)
 			}
 
-			if got != tt.want {
-				t.Errorf("Load() = %+v, want %+v", got, tt.want)
+			want := tt.want
+			if want.MessageDriver == "" {
+				want.MessageDriver = config.MessageDirect
+				want.KafkaConsumerGroup = "order-system-payments-v1"
+				want.KafkaConsumerRetry = time.Second
+			}
+			if got != want {
+				t.Errorf("Load() = %+v, want %+v", got, want)
 			}
 		})
 	}

@@ -10,9 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"example.com/order-system/internal/adapters/messaging"
 	"example.com/order-system/internal/app"
-	"example.com/order-system/internal/application/event"
 	outboxapp "example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
@@ -43,12 +41,18 @@ func main() {
 		os.Exit(1)
 	}
 	defer services.Close()
+	messagingStartupContext, cancelMessagingStartup := context.WithTimeout(context.Background(), 10*time.Second)
+	messageRuntime, err := app.NewMessageRuntime(messagingStartupContext, cfg, services, logger)
+	cancelMessagingStartup()
+	if err != nil {
+		logger.Error("initialize messaging failed", "error", err)
+		os.Exit(1)
+	}
+	defer messageRuntime.Close()
 
 	outboxWorker := outboxapp.NewWorker(
 		services.Outbox,
-		messaging.NewDirectPublisher(logger, map[string]messaging.MessageHandler{
-			event.OrderCreatedV1Topic: services.Payments,
-		}),
+		messageRuntime.Publisher,
 		logger,
 		outboxapp.WorkerConfig{
 			PollInterval: cfg.OutboxPollInterval, BatchSize: cfg.OutboxBatchSize,
@@ -67,7 +71,7 @@ func main() {
 		},
 	)
 	workerContext, cancelWorker := context.WithCancel(context.Background())
-	workerDone := make(chan struct{}, 2)
+	workerDone := make(chan struct{}, 3)
 	go func() {
 		defer func() { workerDone <- struct{}{} }()
 		outboxWorker.Run(workerContext)
@@ -76,8 +80,15 @@ func main() {
 		defer func() { workerDone <- struct{}{} }()
 		paymentWorker.Run(workerContext)
 	}()
+	go func() {
+		defer func() { workerDone <- struct{}{} }()
+		if err := messageRuntime.RunConsumer(workerContext); err != nil {
+			logger.ErrorContext(workerContext, "message consumer stopped", "error", err)
+		}
+	}()
 	defer func() {
 		cancelWorker()
+		<-workerDone
 		<-workerDone
 		<-workerDone
 	}()

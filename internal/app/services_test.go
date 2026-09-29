@@ -26,7 +26,7 @@ func TestServicesReadiness(t *testing.T) {
 
 	t.Run("reports storage failure", func(t *testing.T) {
 		wantErr := errors.New("database unavailable")
-		services := &Services{readiness: dependencyPingerStub{err: wantErr}}
+		services := &Services{readiness: []dependencyPinger{dependencyPingerStub{err: wantErr}}}
 
 		err := services.CheckReadiness(context.Background())
 
@@ -34,7 +34,20 @@ func TestServicesReadiness(t *testing.T) {
 			t.Fatalf("CheckReadiness() error = %v, want wrapped %v", err, wantErr)
 		}
 	})
+
+	t.Run("checks dependencies added after storage", func(t *testing.T) {
+		wantErr := errors.New("broker unavailable")
+		services := &Services{}
+		services.AddReadinessDependency(pingContextAdapter{err: wantErr})
+		if err := services.CheckReadiness(context.Background()); !errors.Is(err, wantErr) {
+			t.Fatalf("CheckReadiness() error = %v, want wrapped %v", err, wantErr)
+		}
+	})
 }
+
+type pingContextAdapter struct{ err error }
+
+func (s pingContextAdapter) PingContext(context.Context) error { return s.err }
 
 func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
 	services, err := NewServices(context.Background(), config.Config{

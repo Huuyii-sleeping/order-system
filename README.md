@@ -3,7 +3,8 @@
 这是一个用于学习 Go 后端工程的模块化单体订单系统。目前包含商品查询、
 库存预占、事务下单、幂等创建订单、用户注册登录、短期 Access Token、
 Refresh Token 轮换、订单所有权隔离、HTTP 中间件，以及内存和 PostgreSQL
-两种存储实现。订单创建事件会可靠地驱动支付消费者和支付任务状态机。
+两种存储实现。订单创建事件会可靠地驱动支付消费者和支付任务状态机；消息层
+支持默认的进程内模式，以及使用 Redpanda 本地运行的 Kafka 协议模式。
 
 ## 直接运行（内存模式）
 
@@ -58,6 +59,37 @@ make db-down
 
 `db-down` 不删除数据卷。配置示例见 `.env.example`。数据库迁移由
 `cmd/migrate` 执行，已执行版本记录在 `schema_migrations` 表中。
+
+## 使用 Kafka/Redpanda 消息链路
+
+Kafka 模式需要持久化 Inbox，因此必须和 PostgreSQL 一起使用。启动完整基础设施、
+执行数据库迁移并创建三分区的 `orders.created.v1` Topic，以及隔离的集成测试
+Topic：
+
+```bash
+make infra-up
+```
+
+启动使用真实 Broker 的 API：
+
+```bash
+make run-kafka
+```
+
+运行 Kafka 客户端与 Redpanda 的集成测试：
+
+```bash
+make test-kafka-integration
+```
+
+停止全部基础设施：
+
+```bash
+make infra-down
+```
+
+Redpanda 对外只监听 `127.0.0.1:19092`。它实现 Kafka 协议，用于本地开发时
+减少运行成本；应用通过标准 Kafka 客户端接入，不依赖 Redpanda 专有 API。
 
 ## API 示例
 
@@ -121,9 +153,11 @@ HTTP 指标按 Method、路由模板和状态码聚合，例如动态订单地�
 监控系统或受保护的内部网络，不应直接开放到公网。
 
 创建订单时，订单、库存和 `orders.created.v1` Outbox 事件会在同一个事务中
-提交。后台 Worker 按批次认领事件并发布；失败后使用指数退避重试。当前使用
-进程内消息适配器把事件交给支付消费者，后续可以替换为 Kafka 等消息系统。
-Outbox 提供至少一次投递，下游通过 Inbox 消息 ID 去重。
+提交。后台 Worker 按批次认领事件并发布；失败后使用指数退避重试。默认的
+`direct` 模式会在进程内调用支付消费者；`kafka` 模式会等待 Broker 确认消息写入，
+再标记 Outbox 已发布。消费者只在本地业务事务成功后提交 offset。发布确认和
+offset 提交都存在崩溃窗口，因此整个链路仍是至少一次投递，下游通过 Inbox
+消息 ID 去重。订单 ID 作为 Kafka Record Key，使同一订单的事件进入同一分区。
 
 支付消费者在同一个事务中写入 Inbox、创建 `pending` 支付和支付任务。另一个
 Worker 在事务外调用模拟支付 Provider，并用稳定的支付 ID 作为第三方幂等键。
