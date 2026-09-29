@@ -11,6 +11,7 @@ import (
 
 	"example.com/order-system/internal/adapters/memory"
 	orderapp "example.com/order-system/internal/application/order"
+	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/domain/order"
@@ -49,6 +50,75 @@ func TestOrderStoreRollsBackFailedTransaction(t *testing.T) {
 	_, err = store.GetOrderByIDAndCustomerID(context.Background(), created.ID(), created.CustomerID())
 	if !errors.Is(err, order.ErrOrderNotFound) {
 		t.Fatalf("GetOrderByID() error = %v, want order not found", err)
+	}
+}
+
+func TestOrderStoreRollsBackOutboxWithOrder(t *testing.T) {
+	store := mustOrderStore(t, 5)
+	created := mustStoredOrder(t, "order-1", "key-1")
+	message := mustOutboxMessage(t, "message-1", created.ID())
+	wantErr := errors.New("stop transaction")
+
+	err := store.Transact(context.Background(), func(tx orderapp.Transaction) error {
+		if err := tx.SaveOrder(created); err != nil {
+			return err
+		}
+		if err := tx.SaveOutboxMessage(message); err != nil {
+			return err
+		}
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Transact() error = %v, want %v", err, wantErr)
+	}
+	claimed, err := store.Claim(
+		context.Background(), "lease-1", 10, time.Now(), time.Now().Add(time.Minute),
+	)
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("Claim() = %+v, %v; want no rolled-back message", claimed, err)
+	}
+}
+
+func TestOrderStoreOutboxLeaseAndRetry(t *testing.T) {
+	store := mustOrderStore(t, 5)
+	now := time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC)
+	message := mustOutboxMessageAt(t, "message-1", "order-1", now)
+	if err := store.Transact(context.Background(), func(tx orderapp.Transaction) error {
+		return tx.SaveOutboxMessage(message)
+	}); err != nil {
+		t.Fatalf("save outbox message: %v", err)
+	}
+
+	first, err := store.Claim(context.Background(), "lease-1", 1, now, now.Add(time.Minute))
+	if err != nil || len(first) != 1 || first[0].Attempts != 1 {
+		t.Fatalf("first Claim() = %+v, %v", first, err)
+	}
+	second, err := store.Claim(context.Background(), "lease-2", 1, now, now.Add(time.Minute))
+	if err != nil || len(second) != 0 {
+		t.Fatalf("concurrent Claim() = %+v, %v; want empty", second, err)
+	}
+	if err := store.MarkFailed(
+		context.Background(), message.ID, "lease-1", now.Add(2*time.Minute), "broker unavailable",
+	); err != nil {
+		t.Fatalf("MarkFailed() error = %v", err)
+	}
+	early, _ := store.Claim(context.Background(), "lease-3", 1, now.Add(time.Minute), now.Add(2*time.Minute))
+	if len(early) != 0 {
+		t.Fatalf("early retry claimed = %+v", early)
+	}
+	retry, err := store.Claim(context.Background(), "lease-4", 1, now.Add(2*time.Minute), now.Add(3*time.Minute))
+	if err != nil || len(retry) != 1 || retry[0].Attempts != 2 {
+		t.Fatalf("retry Claim() = %+v, %v", retry, err)
+	}
+	if err := store.MarkPublished(context.Background(), message.ID, "stale-lease", now); !errors.Is(err, outbox.ErrLeaseLost) {
+		t.Fatalf("stale MarkPublished() error = %v", err)
+	}
+	if err := store.MarkPublished(context.Background(), message.ID, "lease-4", now); err != nil {
+		t.Fatalf("MarkPublished() error = %v", err)
+	}
+	afterPublish, _ := store.Claim(context.Background(), "lease-5", 1, now.Add(time.Hour), now.Add(2*time.Hour))
+	if len(afterPublish) != 0 {
+		t.Fatalf("published message claimed again = %+v", afterPublish)
 	}
 }
 
@@ -252,4 +322,22 @@ func mustStoredOrder(t *testing.T, orderID, idempotencyKey string) order.Order {
 		t.Fatalf("create order fixture: %v", err)
 	}
 	return created
+}
+
+func mustOutboxMessage(t *testing.T, messageID, orderID string) outbox.Message {
+	t.Helper()
+	return mustOutboxMessageAt(t, messageID, orderID, time.Now())
+}
+
+func mustOutboxMessageAt(
+	t *testing.T, messageID, orderID string, occurredAt time.Time,
+) outbox.Message {
+	t.Helper()
+	message, err := outbox.NewMessage(
+		messageID, orderapp.OrderCreatedTopic, orderID, []byte(`{"order_id":"order-1"}`), occurredAt,
+	)
+	if err != nil {
+		t.Fatalf("create outbox fixture: %v", err)
+	}
+	return message
 }

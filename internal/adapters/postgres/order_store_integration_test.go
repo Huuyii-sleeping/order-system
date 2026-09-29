@@ -14,6 +14,7 @@ import (
 
 	"example.com/order-system/internal/adapters/postgres"
 	orderapp "example.com/order-system/internal/application/order"
+	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/domain/order"
 	"example.com/order-system/migrations"
@@ -67,6 +68,7 @@ func TestIntegrationPostgresTransactionConcurrencyAndIdempotency(t *testing.T) {
 	}
 	seedIntegrationUsers(
 		t, db,
+		"rollback-customer",
 		"oversell-customer",
 		"idempotent-customer",
 		"scoped-customer-a",
@@ -88,6 +90,26 @@ func TestIntegrationPostgresTransactionConcurrencyAndIdempotency(t *testing.T) {
 			if err := tx.SaveStock(reserved); err != nil {
 				return err
 			}
+			created, err := order.New(
+				"rollback-order", "rollback-customer", "product-1",
+				1, 12900, "rollback-key", time.Now(),
+			)
+			if err != nil {
+				return err
+			}
+			if err := tx.SaveOrder(created); err != nil {
+				return err
+			}
+			message, err := outbox.NewMessage(
+				"rollback-message", orderapp.OrderCreatedTopic, "rollback-order",
+				[]byte(`{"order_id":"rollback-order"}`), time.Now(),
+			)
+			if err != nil {
+				return err
+			}
+			if err := tx.SaveOutboxMessage(message); err != nil {
+				return err
+			}
 			return wantErr
 		})
 		if !errors.Is(err, wantErr) {
@@ -95,6 +117,24 @@ func TestIntegrationPostgresTransactionConcurrencyAndIdempotency(t *testing.T) {
 		}
 		if got := queryAvailable(t, db, "product-1"); got != 10 {
 			t.Errorf("available = %d, want 10 after rollback", got)
+		}
+		var outboxCount int
+		if err := db.QueryRowContext(ctx, `
+			SELECT count(*) FROM outbox_messages WHERE id = 'rollback-message'
+		`).Scan(&outboxCount); err != nil {
+			t.Fatalf("count rolled-back outbox message: %v", err)
+		}
+		if outboxCount != 0 {
+			t.Errorf("rolled-back outbox messages = %d, want 0", outboxCount)
+		}
+		var orderCount int
+		if err := db.QueryRowContext(ctx, `
+			SELECT count(*) FROM orders WHERE id = 'rollback-order'
+		`).Scan(&orderCount); err != nil {
+			t.Fatalf("count rolled-back order: %v", err)
+		}
+		if orderCount != 0 {
+			t.Errorf("rolled-back orders = %d, want 0", orderCount)
 		}
 	})
 

@@ -3,17 +3,21 @@ package orderapp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/domain/order"
 )
 
 var ErrIdempotencyConflict = errors.New("idempotency key was already used for another order request")
+
+const OrderCreatedTopic = "orders.created.v1"
 
 // ProductCatalog 是下单用例读取商品快照所需的最小能力。
 type ProductCatalog interface {
@@ -28,6 +32,7 @@ type Transaction interface {
 	GetStock(string) (inventory.Stock, error)
 	SaveStock(inventory.Stock) error
 	SaveOrder(order.Order) error
+	SaveOutboxMessage(outbox.Message) error
 }
 
 // Store 同时提供订单查询和事务能力。
@@ -132,6 +137,35 @@ func (s *Service) CreateOrder(ctx context.Context, command CreateOrderCommand) (
 		}
 		if err := tx.SaveOrder(created); err != nil {
 			return fmt.Errorf("save order: %w", err)
+		}
+
+		eventID, err := s.ids.NewID()
+		if err != nil {
+			return fmt.Errorf("generate order event ID: %w", err)
+		}
+		payload, err := json.Marshal(struct {
+			OrderID    string    `json:"order_id"`
+			CustomerID string    `json:"customer_id"`
+			ProductID  string    `json:"product_id"`
+			Quantity   int       `json:"quantity"`
+			TotalCents int64     `json:"total_cents"`
+			OccurredAt time.Time `json:"occurred_at"`
+		}{
+			OrderID: created.ID(), CustomerID: created.CustomerID(),
+			ProductID: created.ProductID(), Quantity: created.Quantity(),
+			TotalCents: created.TotalCents(), OccurredAt: created.CreatedAt(),
+		})
+		if err != nil {
+			return fmt.Errorf("encode order created event: %w", err)
+		}
+		message, err := outbox.NewMessage(
+			eventID, OrderCreatedTopic, created.ID(), payload, created.CreatedAt(),
+		)
+		if err != nil {
+			return fmt.Errorf("create order event: %w", err)
+		}
+		if err := tx.SaveOutboxMessage(message); err != nil {
+			return fmt.Errorf("save order event: %w", err)
 		}
 
 		result = CreateOrderResult{Order: created, Created: true}

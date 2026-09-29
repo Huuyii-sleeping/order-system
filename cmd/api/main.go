@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"example.com/order-system/internal/adapters/messaging"
 	"example.com/order-system/internal/app"
+	outboxapp "example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/config"
 	platformmetrics "example.com/order-system/internal/platform/metrics"
 	"example.com/order-system/internal/transport/httpapi"
@@ -40,6 +42,27 @@ func main() {
 	}
 	defer services.Close()
 
+	outboxWorker := outboxapp.NewWorker(
+		services.Outbox,
+		messaging.NewLogPublisher(logger),
+		logger,
+		outboxapp.WorkerConfig{
+			PollInterval: cfg.OutboxPollInterval, BatchSize: cfg.OutboxBatchSize,
+			LeaseDuration: cfg.OutboxLeaseDuration, RetryBase: cfg.OutboxRetryBase,
+			RetryMax: cfg.OutboxRetryMax,
+		},
+	)
+	workerContext, cancelWorker := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		outboxWorker.Run(workerContext)
+	}()
+	defer func() {
+		cancelWorker()
+		<-workerDone
+	}()
+
 	metricRegistry := platformmetrics.NewRegistry()
 	router := httpapi.NewRouterWithConfig(
 		services.Catalog,
@@ -66,8 +89,9 @@ func main() {
 	//
 	// router
 	//   ← recovery
-	//       ← access log
-	//           ← request ID
+	//       ← metrics
+	//           ← access log
+	//               ← request ID
 	//
 	// Request ID 放在最外层，让后续日志都能关联请求。
 	// Access Log 放在 Recovery 外层，让 panic 被转换成 500 后，

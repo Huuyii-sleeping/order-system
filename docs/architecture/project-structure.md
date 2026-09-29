@@ -84,6 +84,8 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/application/`：已经包含注册登录、会话认证、商品查询与事务下单用例。
 - `internal/adapters/memory/`：提供默认的进程内存实现。
 - `internal/adapters/postgres/`：提供连接池、商品查询、订单事务和迁移实现。
+- `internal/adapters/messaging/`：提供异步事件发布适配器，当前使用结构化日志模拟消息出口。
+- `internal/application/outbox/`：提供 Outbox 消息契约、租约认领、重试和 Worker 生命周期。
 - `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API，认证中间件将可信用户 ID 写入 Context。
 - `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程和 HTTP 请求指标。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。

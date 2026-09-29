@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	orderapp "example.com/order-system/internal/application/order"
+	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/domain/order"
 )
@@ -28,6 +32,7 @@ type OrderStore struct {
 	stocksByProduct         map[string]inventory.Stock
 	ordersByID              map[string]order.Order
 	orderIDByIdempotencyKey map[idempotencyScope]string
+	outboxMessages          map[string]memoryOutboxMessage
 }
 
 func NewOrderStore(stocks []inventory.Stock) (*OrderStore, error) {
@@ -44,6 +49,7 @@ func NewOrderStore(stocks []inventory.Stock) (*OrderStore, error) {
 		stocksByProduct:         stocksByProduct,
 		ordersByID:              make(map[string]order.Order),
 		orderIDByIdempotencyKey: make(map[idempotencyScope]string),
+		outboxMessages:          make(map[string]memoryOutboxMessage),
 	}, nil
 }
 
@@ -65,6 +71,7 @@ func (s *OrderStore) Transact(ctx context.Context, fn func(orderapp.Transaction)
 		stocksByProduct:         cloneMap(s.stocksByProduct),
 		ordersByID:              cloneMap(s.ordersByID),
 		orderIDByIdempotencyKey: cloneMap(s.orderIDByIdempotencyKey),
+		outboxMessages:          cloneMap(s.outboxMessages),
 	}
 
 	if err := fn(tx); err != nil {
@@ -77,6 +84,7 @@ func (s *OrderStore) Transact(ctx context.Context, fn func(orderapp.Transaction)
 	s.stocksByProduct = tx.stocksByProduct
 	s.ordersByID = tx.ordersByID
 	s.orderIDByIdempotencyKey = tx.orderIDByIdempotencyKey
+	s.outboxMessages = tx.outboxMessages
 	return nil
 }
 
@@ -103,6 +111,7 @@ type memoryTransaction struct {
 	stocksByProduct         map[string]inventory.Stock
 	ordersByID              map[string]order.Order
 	orderIDByIdempotencyKey map[idempotencyScope]string
+	outboxMessages          map[string]memoryOutboxMessage
 }
 
 type idempotencyScope struct {
@@ -148,6 +157,111 @@ func (tx *memoryTransaction) SaveOrder(created order.Order) error {
 
 	tx.ordersByID[created.ID()] = created
 	tx.orderIDByIdempotencyKey[scope] = created.ID()
+	return nil
+}
+
+func (tx *memoryTransaction) SaveOutboxMessage(message outbox.Message) error {
+	if _, exists := tx.outboxMessages[message.ID]; exists {
+		return fmt.Errorf("duplicate outbox message ID %q", message.ID)
+	}
+	message.Payload = append([]byte(nil), message.Payload...)
+	tx.outboxMessages[message.ID] = memoryOutboxMessage{
+		Message: message, nextAttemptAt: message.OccurredAt,
+	}
+	return nil
+}
+
+type memoryOutboxMessage struct {
+	outbox.Message
+	nextAttemptAt time.Time
+	lockedUntil   time.Time
+	publishedAt   time.Time
+	lastError     string
+}
+
+func (s *OrderStore) Claim(
+	ctx context.Context, leaseID string, batchSize int, now, lockedUntil time.Time,
+) ([]outbox.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(leaseID) == "" || batchSize <= 0 || !lockedUntil.After(now) {
+		return nil, outbox.ErrInvalidClaim
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	eligible := make([]string, 0, len(s.outboxMessages))
+	for id, record := range s.outboxMessages {
+		if !record.publishedAt.IsZero() || record.nextAttemptAt.After(now) ||
+			(!record.lockedUntil.IsZero() && record.lockedUntil.After(now)) {
+			continue
+		}
+		eligible = append(eligible, id)
+	}
+	sort.Slice(eligible, func(i, j int) bool {
+		left := s.outboxMessages[eligible[i]].OccurredAt
+		right := s.outboxMessages[eligible[j]].OccurredAt
+		if left.Equal(right) {
+			return eligible[i] < eligible[j]
+		}
+		return left.Before(right)
+	})
+	if len(eligible) > batchSize {
+		eligible = eligible[:batchSize]
+	}
+
+	messages := make([]outbox.Message, 0, len(eligible))
+	for _, id := range eligible {
+		record := s.outboxMessages[id]
+		record.Attempts++
+		record.LeaseID = leaseID
+		record.lockedUntil = lockedUntil
+		s.outboxMessages[id] = record
+		message := record.Message
+		message.Payload = append([]byte(nil), message.Payload...)
+		messages = append(messages, message)
+	}
+	return messages, nil
+}
+
+func (s *OrderStore) MarkPublished(
+	ctx context.Context, messageID, leaseID string, publishedAt time.Time,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, exists := s.outboxMessages[messageID]
+	if !exists || record.LeaseID != leaseID || !record.publishedAt.IsZero() {
+		return outbox.ErrLeaseLost
+	}
+	record.publishedAt = publishedAt
+	record.LeaseID = ""
+	record.lockedUntil = time.Time{}
+	record.lastError = ""
+	s.outboxMessages[messageID] = record
+	return nil
+}
+
+func (s *OrderStore) MarkFailed(
+	ctx context.Context, messageID, leaseID string, nextAttemptAt time.Time, reason string,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, exists := s.outboxMessages[messageID]
+	if !exists || record.LeaseID != leaseID || !record.publishedAt.IsZero() {
+		return outbox.ErrLeaseLost
+	}
+	record.nextAttemptAt = nextAttemptAt
+	record.lastError = reason
+	record.LeaseID = ""
+	record.lockedUntil = time.Time{}
+	s.outboxMessages[messageID] = record
 	return nil
 }
 

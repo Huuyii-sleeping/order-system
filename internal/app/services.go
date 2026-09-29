@@ -15,6 +15,7 @@ import (
 	authapp "example.com/order-system/internal/application/auth"
 	catalogapp "example.com/order-system/internal/application/catalog"
 	orderapp "example.com/order-system/internal/application/order"
+	outboxapp "example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/config"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
@@ -24,6 +25,7 @@ type Services struct {
 	Catalog *catalogapp.Service
 	Auth    *authapp.Service
 	Orders  *orderapp.Service
+	Outbox  outboxapp.Store
 
 	readiness dependencyPinger
 	closer    io.Closer
@@ -37,6 +39,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	var products catalogapp.Repository
 	var identities authapp.Store
 	var orders orderapp.Store
+	var outboxStore outboxapp.Store
 	var readiness dependencyPinger
 	var closer io.Closer
 
@@ -53,10 +56,12 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 
 		products = memory.NewCatalogRepository(seededProducts)
 		identities = memory.NewIdentityStore()
-		orders, err = memory.NewOrderStore(seededStocks)
+		memoryOrders, err := memory.NewOrderStore(seededStocks)
 		if err != nil {
 			return nil, fmt.Errorf("create memory order store: %w", err)
 		}
+		orders = memoryOrders
+		outboxStore = memoryOrders
 
 	case config.StoragePostgres:
 		db, err := postgres.Open(ctx, cfg.DatabaseURL)
@@ -68,6 +73,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		products = postgres.NewCatalogRepository(db)
 		identities = postgres.NewIdentityStore(db)
 		orders = postgres.NewOrderStore(db)
+		outboxStore = postgres.NewOutboxStore(db)
 
 	default:
 		return nil, fmt.Errorf("unsupported storage driver %q", cfg.StorageDriver)
@@ -90,6 +96,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			idgenerator.Random{},
 			clock.System{},
 		),
+		Outbox:    outboxStore,
 		readiness: readiness,
 		closer:    closer,
 	}, nil

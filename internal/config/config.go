@@ -31,23 +31,34 @@ type Config struct {
 	LoginRateLimit   int
 	RefreshRateLimit int
 	BcryptCost       int
+
+	OutboxPollInterval  time.Duration
+	OutboxBatchSize     int
+	OutboxLeaseDuration time.Duration
+	OutboxRetryBase     time.Duration
+	OutboxRetryMax      time.Duration
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppName:          envOrDefault("APP_NAME", "order-system"),
-		HTTPAddr:         envOrDefault("HTTP_ADDR", ":8080"),
-		ShutdownTimeout:  10 * time.Second,
-		ReadinessTimeout: 2 * time.Second,
-		StorageDriver:    strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		AccessTokenTTL:   15 * time.Minute,
-		RefreshTokenTTL:  30 * 24 * time.Hour,
-		SecureCookies:    false,
-		AuthRateWindow:   time.Minute,
-		LoginRateLimit:   10,
-		RefreshRateLimit: 30,
-		BcryptCost:       12,
+		AppName:             envOrDefault("APP_NAME", "order-system"),
+		HTTPAddr:            envOrDefault("HTTP_ADDR", ":8080"),
+		ShutdownTimeout:     10 * time.Second,
+		ReadinessTimeout:    2 * time.Second,
+		StorageDriver:       strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		AccessTokenTTL:      15 * time.Minute,
+		RefreshTokenTTL:     30 * 24 * time.Hour,
+		SecureCookies:       false,
+		AuthRateWindow:      time.Minute,
+		LoginRateLimit:      10,
+		RefreshRateLimit:    30,
+		BcryptCost:          12,
+		OutboxPollInterval:  time.Second,
+		OutboxBatchSize:     20,
+		OutboxLeaseDuration: 30 * time.Second,
+		OutboxRetryBase:     time.Second,
+		OutboxRetryMax:      time.Minute,
 	}
 
 	switch cfg.StorageDriver {
@@ -69,6 +80,10 @@ func Load() (Config, error) {
 		{name: "ACCESS_TOKEN_TTL", target: &cfg.AccessTokenTTL},
 		{name: "REFRESH_TOKEN_TTL", target: &cfg.RefreshTokenTTL},
 		{name: "AUTH_RATE_WINDOW", target: &cfg.AuthRateWindow},
+		{name: "OUTBOX_POLL_INTERVAL", target: &cfg.OutboxPollInterval},
+		{name: "OUTBOX_LEASE_DURATION", target: &cfg.OutboxLeaseDuration},
+		{name: "OUTBOX_RETRY_BASE", target: &cfg.OutboxRetryBase},
+		{name: "OUTBOX_RETRY_MAX", target: &cfg.OutboxRetryMax},
 	} {
 		if err := loadPositiveDuration(setting.name, setting.target); err != nil {
 			return Config{}, err
@@ -90,6 +105,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.RefreshRateLimit = refreshRateLimit
+	outboxBatchSize, err := loadPositiveInt("OUTBOX_BATCH_SIZE", cfg.OutboxBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.OutboxBatchSize = outboxBatchSize
+	if cfg.OutboxRetryMax < cfg.OutboxRetryBase {
+		return Config{}, fmt.Errorf(
+			"OUTBOX_RETRY_MAX must be greater than or equal to OUTBOX_RETRY_BASE",
+		)
+	}
 
 	return cfg, nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	orderapp "example.com/order-system/internal/application/order"
+	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/domain/order"
 )
@@ -165,6 +166,18 @@ func (tx *orderTransaction) SaveOrder(created order.Order) error {
 	}
 
 	return classifyInsertOrderError(err)
+}
+
+func (tx *orderTransaction) SaveOutboxMessage(message outbox.Message) error {
+	_, err := tx.tx.ExecContext(tx.ctx, `
+		INSERT INTO outbox_messages (
+			id, topic, message_key, payload, occurred_at, next_attempt_at
+		) VALUES ($1, $2, $3, $4, $5, $5)
+	`, message.ID, message.Topic, message.Key, []byte(message.Payload), message.OccurredAt)
+	if err != nil {
+		return fmt.Errorf("insert outbox message: %w", err)
+	}
+	return nil
 }
 
 func classifyInsertOrderError(err error) error {

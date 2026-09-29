@@ -2,11 +2,13 @@ package orderapp_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	orderapp "example.com/order-system/internal/application/order"
+	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/domain/order"
@@ -49,15 +51,18 @@ func (s *storeStub) GetOrderByIDAndCustomerID(_ context.Context, orderID, custom
 }
 
 type transactionStub struct {
-	existing        order.Order
-	existingErr     error
-	stock           inventory.Stock
-	stockErr        error
-	saveOrderErr    error
-	savedOrder      order.Order
-	savedStock      inventory.Stock
-	saveStockCalled bool
-	saveOrderCalled bool
+	existing         order.Order
+	existingErr      error
+	stock            inventory.Stock
+	stockErr         error
+	saveOrderErr     error
+	saveOutboxErr    error
+	savedOrder       order.Order
+	savedMessage     outbox.Message
+	savedStock       inventory.Stock
+	saveStockCalled  bool
+	saveOrderCalled  bool
+	saveOutboxCalled bool
 }
 
 func (t *transactionStub) GetOrderByIdempotencyKey(string, string) (order.Order, error) {
@@ -78,6 +83,12 @@ func (t *transactionStub) SaveOrder(created order.Order) error {
 	t.saveOrderCalled = true
 	t.savedOrder = created
 	return t.saveOrderErr
+}
+
+func (t *transactionStub) SaveOutboxMessage(message outbox.Message) error {
+	t.saveOutboxCalled = true
+	t.savedMessage = message
+	return t.saveOutboxErr
 }
 
 type idGeneratorStub struct {
@@ -126,6 +137,22 @@ func TestCreateOrderReservesStockAndSavesPriceSnapshot(t *testing.T) {
 	if !tx.saveOrderCalled || tx.savedOrder.ID() != "order-1" {
 		t.Fatalf("saved order = %+v, called = %v", tx.savedOrder, tx.saveOrderCalled)
 	}
+	if !tx.saveOutboxCalled || tx.savedMessage.Topic != orderapp.OrderCreatedTopic ||
+		tx.savedMessage.Key != "order-1" {
+		t.Fatalf("saved outbox message = %+v, called = %v", tx.savedMessage, tx.saveOutboxCalled)
+	}
+	var eventPayload struct {
+		OrderID    string `json:"order_id"`
+		CustomerID string `json:"customer_id"`
+		TotalCents int64  `json:"total_cents"`
+	}
+	if err := json.Unmarshal(tx.savedMessage.Payload, &eventPayload); err != nil {
+		t.Fatalf("decode outbox payload: %v", err)
+	}
+	if eventPayload.OrderID != "order-1" || eventPayload.CustomerID != "customer-1" ||
+		eventPayload.TotalCents != 25800 {
+		t.Errorf("outbox payload = %+v", eventPayload)
+	}
 }
 
 func TestCreateOrderReturnsExistingOrderForSameIdempotentRequest(t *testing.T) {
@@ -155,8 +182,8 @@ func TestCreateOrderReturnsExistingOrderForSameIdempotentRequest(t *testing.T) {
 	if result.Order.ID() != existing.ID() {
 		t.Errorf("order ID = %q, want %q", result.Order.ID(), existing.ID())
 	}
-	if tx.saveStockCalled || tx.saveOrderCalled {
-		t.Fatal("idempotent retry must not write stock or order")
+	if tx.saveStockCalled || tx.saveOrderCalled || tx.saveOutboxCalled {
+		t.Fatal("idempotent retry must not write stock, order, or outbox event")
 	}
 }
 
@@ -199,8 +226,27 @@ func TestCreateOrderStopsWhenStockIsInsufficient(t *testing.T) {
 	if !errors.Is(err, inventory.ErrInsufficientStock) {
 		t.Fatalf("CreateOrder() error = %v, want insufficient stock", err)
 	}
-	if tx.saveStockCalled || tx.saveOrderCalled {
-		t.Fatal("failed reservation must not write stock or order")
+	if tx.saveStockCalled || tx.saveOrderCalled || tx.saveOutboxCalled {
+		t.Fatal("failed reservation must not write stock, order, or outbox event")
+	}
+}
+
+func TestCreateOrderFailsTransactionWhenOutboxWriteFails(t *testing.T) {
+	wantErr := errors.New("outbox unavailable")
+	tx := &transactionStub{
+		stock: mustStock(t, 5), existingErr: order.ErrOrderNotFound, saveOutboxErr: wantErr,
+	}
+	service := orderapp.NewService(
+		productCatalogStub{product: mustProduct(t, 12900)},
+		&storeStub{tx: tx}, idGeneratorStub{id: "generated-id"}, clockStub{now: time.Now()},
+	)
+
+	_, err := service.CreateOrder(context.Background(), orderapp.CreateOrderCommand{
+		CustomerID: "customer-1", ProductID: "product-1", Quantity: 1, IdempotencyKey: "key-1",
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("CreateOrder() error = %v, want %v", err, wantErr)
 	}
 }
 
