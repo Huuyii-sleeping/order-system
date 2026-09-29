@@ -12,7 +12,9 @@ import (
 
 	"example.com/order-system/internal/adapters/messaging"
 	"example.com/order-system/internal/app"
+	"example.com/order-system/internal/application/event"
 	outboxapp "example.com/order-system/internal/application/outbox"
+	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
 	platformmetrics "example.com/order-system/internal/platform/metrics"
 	"example.com/order-system/internal/transport/httpapi"
@@ -44,7 +46,9 @@ func main() {
 
 	outboxWorker := outboxapp.NewWorker(
 		services.Outbox,
-		messaging.NewLogPublisher(logger),
+		messaging.NewDirectPublisher(logger, map[string]messaging.MessageHandler{
+			event.OrderCreatedV1Topic: services.Payments,
+		}),
 		logger,
 		outboxapp.WorkerConfig{
 			PollInterval: cfg.OutboxPollInterval, BatchSize: cfg.OutboxBatchSize,
@@ -52,14 +56,29 @@ func main() {
 			RetryMax: cfg.OutboxRetryMax,
 		},
 	)
+	paymentWorker := paymentapp.NewWorker(
+		services.PaymentTasks,
+		services.PaymentProvider,
+		logger,
+		paymentapp.WorkerConfig{
+			PollInterval: cfg.PaymentPollInterval, BatchSize: cfg.PaymentBatchSize,
+			LeaseDuration: cfg.PaymentLeaseDuration, RetryBase: cfg.PaymentRetryBase,
+			RetryMax: cfg.PaymentRetryMax,
+		},
+	)
 	workerContext, cancelWorker := context.WithCancel(context.Background())
-	workerDone := make(chan struct{})
+	workerDone := make(chan struct{}, 2)
 	go func() {
-		defer close(workerDone)
+		defer func() { workerDone <- struct{}{} }()
 		outboxWorker.Run(workerContext)
+	}()
+	go func() {
+		defer func() { workerDone <- struct{}{} }()
+		paymentWorker.Run(workerContext)
 	}()
 	defer func() {
 		cancelWorker()
+		<-workerDone
 		<-workerDone
 	}()
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"example.com/order-system/internal/application/event"
 	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
@@ -17,7 +18,8 @@ import (
 
 var ErrIdempotencyConflict = errors.New("idempotency key was already used for another order request")
 
-const OrderCreatedTopic = "orders.created.v1"
+// OrderCreatedTopic 保留生产者侧易读名称，具体版本由共享事件契约定义。
+const OrderCreatedTopic = event.OrderCreatedV1Topic
 
 // ProductCatalog 是下单用例读取商品快照所需的最小能力。
 type ProductCatalog interface {
@@ -143,14 +145,7 @@ func (s *Service) CreateOrder(ctx context.Context, command CreateOrderCommand) (
 		if err != nil {
 			return fmt.Errorf("generate order event ID: %w", err)
 		}
-		payload, err := json.Marshal(struct {
-			OrderID    string    `json:"order_id"`
-			CustomerID string    `json:"customer_id"`
-			ProductID  string    `json:"product_id"`
-			Quantity   int       `json:"quantity"`
-			TotalCents int64     `json:"total_cents"`
-			OccurredAt time.Time `json:"occurred_at"`
-		}{
+		payload, err := json.Marshal(event.OrderCreatedV1{
 			OrderID: created.ID(), CustomerID: created.CustomerID(),
 			ProductID: created.ProductID(), Quantity: created.Quantity(),
 			TotalCents: created.TotalCents(), OccurredAt: created.CreatedAt(),
@@ -159,7 +154,7 @@ func (s *Service) CreateOrder(ctx context.Context, command CreateOrderCommand) (
 			return fmt.Errorf("encode order created event: %w", err)
 		}
 		message, err := outbox.NewMessage(
-			eventID, OrderCreatedTopic, created.ID(), payload, created.CreatedAt(),
+			eventID, event.OrderCreatedV1Topic, created.ID(), payload, created.CreatedAt(),
 		)
 		if err != nil {
 			return fmt.Errorf("create order event: %w", err)

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"example.com/order-system/internal/config"
 )
 
 type dependencyPingerStub struct {
@@ -31,4 +34,18 @@ func TestServicesReadiness(t *testing.T) {
 			t.Fatalf("CheckReadiness() error = %v, want wrapped %v", err, wantErr)
 		}
 	})
+}
+
+func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
+	services, err := NewServices(context.Background(), config.Config{
+		StorageDriver:  config.StorageMemory,
+		AccessTokenTTL: time.Minute, RefreshTokenTTL: time.Hour, BcryptCost: 4,
+	})
+	if err != nil {
+		t.Fatalf("NewServices() error = %v", err)
+	}
+	t.Cleanup(func() { _ = services.Close() })
+	if services.Payments == nil || services.PaymentTasks == nil || services.PaymentProvider == nil {
+		t.Fatal("payment consumer, task store, and provider must be wired")
+	}
 }

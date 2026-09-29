@@ -8,8 +8,8 @@ import (
 	"example.com/order-system/internal/application/outbox"
 )
 
-// LogPublisher 是当前学习阶段的本地消息出口。替换为 Kafka 等实现时，
-// Worker、Outbox 表和订单事务都不需要改变。
+// LogPublisher 是只记录事件元数据的诊断适配器。运行中的业务链路使用
+// DirectPublisher；替换为 Kafka 时，Worker、Outbox 表和订单事务不需要改变。
 type LogPublisher struct {
 	logger *slog.Logger
 }

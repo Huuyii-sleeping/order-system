@@ -10,22 +10,27 @@ import (
 	"example.com/order-system/internal/adapters/idgenerator"
 	"example.com/order-system/internal/adapters/memory"
 	"example.com/order-system/internal/adapters/password"
+	"example.com/order-system/internal/adapters/paymentprovider"
 	"example.com/order-system/internal/adapters/postgres"
 	"example.com/order-system/internal/adapters/sessiontoken"
 	authapp "example.com/order-system/internal/application/auth"
 	catalogapp "example.com/order-system/internal/application/catalog"
 	orderapp "example.com/order-system/internal/application/order"
 	outboxapp "example.com/order-system/internal/application/outbox"
+	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
 )
 
 type Services struct {
-	Catalog *catalogapp.Service
-	Auth    *authapp.Service
-	Orders  *orderapp.Service
-	Outbox  outboxapp.Store
+	Catalog         *catalogapp.Service
+	Auth            *authapp.Service
+	Orders          *orderapp.Service
+	Outbox          outboxapp.Store
+	Payments        *paymentapp.Consumer
+	PaymentTasks    paymentapp.TaskStore
+	PaymentProvider paymentapp.Provider
 
 	readiness dependencyPinger
 	closer    io.Closer
@@ -40,6 +45,10 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	var identities authapp.Store
 	var orders orderapp.Store
 	var outboxStore outboxapp.Store
+	var paymentStore interface {
+		paymentapp.Store
+		paymentapp.TaskStore
+	}
 	var readiness dependencyPinger
 	var closer io.Closer
 
@@ -62,6 +71,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		}
 		orders = memoryOrders
 		outboxStore = memoryOrders
+		paymentStore = memory.NewPaymentStore()
 
 	case config.StoragePostgres:
 		db, err := postgres.Open(ctx, cfg.DatabaseURL)
@@ -74,11 +84,15 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		identities = postgres.NewIdentityStore(db)
 		orders = postgres.NewOrderStore(db)
 		outboxStore = postgres.NewOutboxStore(db)
+		paymentStore = postgres.NewPaymentStore(db)
 
 	default:
 		return nil, fmt.Errorf("unsupported storage driver %q", cfg.StorageDriver)
 	}
 
+	paymentConsumer := paymentapp.NewConsumer(
+		paymentStore, idgenerator.Random{}, clock.System{},
+	)
 	return &Services{
 		Catalog: catalogapp.NewService(products),
 		Auth: authapp.NewService(
@@ -96,9 +110,12 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			idgenerator.Random{},
 			clock.System{},
 		),
-		Outbox:    outboxStore,
-		readiness: readiness,
-		closer:    closer,
+		Outbox:          outboxStore,
+		Payments:        paymentConsumer,
+		PaymentTasks:    paymentStore,
+		PaymentProvider: paymentprovider.NewSimulated(),
+		readiness:       readiness,
+		closer:          closer,
 	}, nil
 }
 

@@ -37,28 +37,39 @@ type Config struct {
 	OutboxLeaseDuration time.Duration
 	OutboxRetryBase     time.Duration
 	OutboxRetryMax      time.Duration
+
+	PaymentPollInterval  time.Duration
+	PaymentBatchSize     int
+	PaymentLeaseDuration time.Duration
+	PaymentRetryBase     time.Duration
+	PaymentRetryMax      time.Duration
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppName:             envOrDefault("APP_NAME", "order-system"),
-		HTTPAddr:            envOrDefault("HTTP_ADDR", ":8080"),
-		ShutdownTimeout:     10 * time.Second,
-		ReadinessTimeout:    2 * time.Second,
-		StorageDriver:       strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		AccessTokenTTL:      15 * time.Minute,
-		RefreshTokenTTL:     30 * 24 * time.Hour,
-		SecureCookies:       false,
-		AuthRateWindow:      time.Minute,
-		LoginRateLimit:      10,
-		RefreshRateLimit:    30,
-		BcryptCost:          12,
-		OutboxPollInterval:  time.Second,
-		OutboxBatchSize:     20,
-		OutboxLeaseDuration: 30 * time.Second,
-		OutboxRetryBase:     time.Second,
-		OutboxRetryMax:      time.Minute,
+		AppName:              envOrDefault("APP_NAME", "order-system"),
+		HTTPAddr:             envOrDefault("HTTP_ADDR", ":8080"),
+		ShutdownTimeout:      10 * time.Second,
+		ReadinessTimeout:     2 * time.Second,
+		StorageDriver:        strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		AccessTokenTTL:       15 * time.Minute,
+		RefreshTokenTTL:      30 * 24 * time.Hour,
+		SecureCookies:        false,
+		AuthRateWindow:       time.Minute,
+		LoginRateLimit:       10,
+		RefreshRateLimit:     30,
+		BcryptCost:           12,
+		OutboxPollInterval:   time.Second,
+		OutboxBatchSize:      20,
+		OutboxLeaseDuration:  30 * time.Second,
+		OutboxRetryBase:      time.Second,
+		OutboxRetryMax:       time.Minute,
+		PaymentPollInterval:  time.Second,
+		PaymentBatchSize:     10,
+		PaymentLeaseDuration: 30 * time.Second,
+		PaymentRetryBase:     time.Second,
+		PaymentRetryMax:      time.Minute,
 	}
 
 	switch cfg.StorageDriver {
@@ -84,6 +95,10 @@ func Load() (Config, error) {
 		{name: "OUTBOX_LEASE_DURATION", target: &cfg.OutboxLeaseDuration},
 		{name: "OUTBOX_RETRY_BASE", target: &cfg.OutboxRetryBase},
 		{name: "OUTBOX_RETRY_MAX", target: &cfg.OutboxRetryMax},
+		{name: "PAYMENT_POLL_INTERVAL", target: &cfg.PaymentPollInterval},
+		{name: "PAYMENT_LEASE_DURATION", target: &cfg.PaymentLeaseDuration},
+		{name: "PAYMENT_RETRY_BASE", target: &cfg.PaymentRetryBase},
+		{name: "PAYMENT_RETRY_MAX", target: &cfg.PaymentRetryMax},
 	} {
 		if err := loadPositiveDuration(setting.name, setting.target); err != nil {
 			return Config{}, err
@@ -110,9 +125,19 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.OutboxBatchSize = outboxBatchSize
+	paymentBatchSize, err := loadPositiveInt("PAYMENT_BATCH_SIZE", cfg.PaymentBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PaymentBatchSize = paymentBatchSize
 	if cfg.OutboxRetryMax < cfg.OutboxRetryBase {
 		return Config{}, fmt.Errorf(
 			"OUTBOX_RETRY_MAX must be greater than or equal to OUTBOX_RETRY_BASE",
+		)
+	}
+	if cfg.PaymentRetryMax < cfg.PaymentRetryBase {
+		return Config{}, fmt.Errorf(
+			"PAYMENT_RETRY_MAX must be greater than or equal to PAYMENT_RETRY_BASE",
 		)
 	}
 

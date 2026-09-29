@@ -18,23 +18,28 @@ func TestLoad(t *testing.T) {
 
 		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
-		appName             string
-		httpAddr            string
-		shutdownTimeout     string
-		readinessTimeout    string
-		storageDriver       string
-		databaseURL         string
-		accessTokenTTL      string
-		refreshTokenTTL     string
-		secureCookies       string
-		authRateWindow      string
-		loginRateLimit      string
-		refreshRateLimit    string
-		outboxPollInterval  string
-		outboxBatchSize     string
-		outboxLeaseDuration string
-		outboxRetryBase     string
-		outboxRetryMax      string
+		appName              string
+		httpAddr             string
+		shutdownTimeout      string
+		readinessTimeout     string
+		storageDriver        string
+		databaseURL          string
+		accessTokenTTL       string
+		refreshTokenTTL      string
+		secureCookies        string
+		authRateWindow       string
+		loginRateLimit       string
+		refreshRateLimit     string
+		outboxPollInterval   string
+		outboxBatchSize      string
+		outboxLeaseDuration  string
+		outboxRetryBase      string
+		outboxRetryMax       string
+		paymentPollInterval  string
+		paymentBatchSize     string
+		paymentLeaseDuration string
+		paymentRetryBase     string
+		paymentRetryMax      string
 
 		want              config.Config
 		wantErrorContains string
@@ -45,22 +50,27 @@ func TestLoad(t *testing.T) {
 			httpAddr:        "",
 			shutdownTimeout: "",
 			want: config.Config{
-				AppName:             "order-system",
-				HTTPAddr:            ":8080",
-				ShutdownTimeout:     10 * time.Second,
-				ReadinessTimeout:    2 * time.Second,
-				StorageDriver:       config.StorageMemory,
-				AccessTokenTTL:      15 * time.Minute,
-				RefreshTokenTTL:     30 * 24 * time.Hour,
-				AuthRateWindow:      time.Minute,
-				LoginRateLimit:      10,
-				RefreshRateLimit:    30,
-				BcryptCost:          12,
-				OutboxPollInterval:  time.Second,
-				OutboxBatchSize:     20,
-				OutboxLeaseDuration: 30 * time.Second,
-				OutboxRetryBase:     time.Second,
-				OutboxRetryMax:      time.Minute,
+				AppName:              "order-system",
+				HTTPAddr:             ":8080",
+				ShutdownTimeout:      10 * time.Second,
+				ReadinessTimeout:     2 * time.Second,
+				StorageDriver:        config.StorageMemory,
+				AccessTokenTTL:       15 * time.Minute,
+				RefreshTokenTTL:      30 * 24 * time.Hour,
+				AuthRateWindow:       time.Minute,
+				LoginRateLimit:       10,
+				RefreshRateLimit:     30,
+				BcryptCost:           12,
+				OutboxPollInterval:   time.Second,
+				OutboxBatchSize:      20,
+				OutboxLeaseDuration:  30 * time.Second,
+				OutboxRetryBase:      time.Second,
+				OutboxRetryMax:       time.Minute,
+				PaymentPollInterval:  time.Second,
+				PaymentBatchSize:     10,
+				PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase:     time.Second,
+				PaymentRetryMax:      time.Minute,
 			},
 		},
 		{
@@ -68,22 +78,27 @@ func TestLoad(t *testing.T) {
 			accessTokenTTL:  "5m",
 			refreshTokenTTL: "12h",
 			want: config.Config{
-				AppName:             "order-system",
-				HTTPAddr:            ":8080",
-				ShutdownTimeout:     10 * time.Second,
-				ReadinessTimeout:    2 * time.Second,
-				StorageDriver:       config.StorageMemory,
-				AccessTokenTTL:      5 * time.Minute,
-				RefreshTokenTTL:     12 * time.Hour,
-				AuthRateWindow:      time.Minute,
-				LoginRateLimit:      10,
-				RefreshRateLimit:    30,
-				BcryptCost:          12,
-				OutboxPollInterval:  time.Second,
-				OutboxBatchSize:     20,
-				OutboxLeaseDuration: 30 * time.Second,
-				OutboxRetryBase:     time.Second,
-				OutboxRetryMax:      time.Minute,
+				AppName:              "order-system",
+				HTTPAddr:             ":8080",
+				ShutdownTimeout:      10 * time.Second,
+				ReadinessTimeout:     2 * time.Second,
+				StorageDriver:        config.StorageMemory,
+				AccessTokenTTL:       5 * time.Minute,
+				RefreshTokenTTL:      12 * time.Hour,
+				AuthRateWindow:       time.Minute,
+				LoginRateLimit:       10,
+				RefreshRateLimit:     30,
+				BcryptCost:           12,
+				OutboxPollInterval:   time.Second,
+				OutboxBatchSize:      20,
+				OutboxLeaseDuration:  30 * time.Second,
+				OutboxRetryBase:      time.Second,
+				OutboxRetryMax:       time.Minute,
+				PaymentPollInterval:  time.Second,
+				PaymentBatchSize:     10,
+				PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase:     time.Second,
+				PaymentRetryMax:      time.Minute,
 			},
 		},
 		{
@@ -94,23 +109,28 @@ func TestLoad(t *testing.T) {
 			storageDriver:   config.StoragePostgres,
 			databaseURL:     "postgres://localhost/order_system",
 			want: config.Config{
-				AppName:             "checkout-service",
-				HTTPAddr:            ":9090",
-				ShutdownTimeout:     30 * time.Second,
-				ReadinessTimeout:    2 * time.Second,
-				StorageDriver:       config.StoragePostgres,
-				DatabaseURL:         "postgres://localhost/order_system",
-				AccessTokenTTL:      15 * time.Minute,
-				RefreshTokenTTL:     30 * 24 * time.Hour,
-				AuthRateWindow:      time.Minute,
-				LoginRateLimit:      10,
-				RefreshRateLimit:    30,
-				BcryptCost:          12,
-				OutboxPollInterval:  time.Second,
-				OutboxBatchSize:     20,
-				OutboxLeaseDuration: 30 * time.Second,
-				OutboxRetryBase:     time.Second,
-				OutboxRetryMax:      time.Minute,
+				AppName:              "checkout-service",
+				HTTPAddr:             ":9090",
+				ShutdownTimeout:      30 * time.Second,
+				ReadinessTimeout:     2 * time.Second,
+				StorageDriver:        config.StoragePostgres,
+				DatabaseURL:          "postgres://localhost/order_system",
+				AccessTokenTTL:       15 * time.Minute,
+				RefreshTokenTTL:      30 * 24 * time.Hour,
+				AuthRateWindow:       time.Minute,
+				LoginRateLimit:       10,
+				RefreshRateLimit:     30,
+				BcryptCost:           12,
+				OutboxPollInterval:   time.Second,
+				OutboxBatchSize:      20,
+				OutboxLeaseDuration:  30 * time.Second,
+				OutboxRetryBase:      time.Second,
+				OutboxRetryMax:       time.Minute,
+				PaymentPollInterval:  time.Second,
+				PaymentBatchSize:     10,
+				PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase:     time.Second,
+				PaymentRetryMax:      time.Minute,
 			},
 		},
 		{
@@ -120,23 +140,28 @@ func TestLoad(t *testing.T) {
 			loginRateLimit:   "4",
 			refreshRateLimit: "12",
 			want: config.Config{
-				AppName:             "order-system",
-				HTTPAddr:            ":8080",
-				ShutdownTimeout:     10 * time.Second,
-				ReadinessTimeout:    2 * time.Second,
-				StorageDriver:       config.StorageMemory,
-				AccessTokenTTL:      15 * time.Minute,
-				RefreshTokenTTL:     30 * 24 * time.Hour,
-				SecureCookies:       true,
-				AuthRateWindow:      30 * time.Second,
-				LoginRateLimit:      4,
-				RefreshRateLimit:    12,
-				BcryptCost:          12,
-				OutboxPollInterval:  time.Second,
-				OutboxBatchSize:     20,
-				OutboxLeaseDuration: 30 * time.Second,
-				OutboxRetryBase:     time.Second,
-				OutboxRetryMax:      time.Minute,
+				AppName:              "order-system",
+				HTTPAddr:             ":8080",
+				ShutdownTimeout:      10 * time.Second,
+				ReadinessTimeout:     2 * time.Second,
+				StorageDriver:        config.StorageMemory,
+				AccessTokenTTL:       15 * time.Minute,
+				RefreshTokenTTL:      30 * 24 * time.Hour,
+				SecureCookies:        true,
+				AuthRateWindow:       30 * time.Second,
+				LoginRateLimit:       4,
+				RefreshRateLimit:     12,
+				BcryptCost:           12,
+				OutboxPollInterval:   time.Second,
+				OutboxBatchSize:      20,
+				OutboxLeaseDuration:  30 * time.Second,
+				OutboxRetryBase:      time.Second,
+				OutboxRetryMax:       time.Minute,
+				PaymentPollInterval:  time.Second,
+				PaymentBatchSize:     10,
+				PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase:     time.Second,
+				PaymentRetryMax:      time.Minute,
 			},
 		},
 		{
@@ -147,22 +172,47 @@ func TestLoad(t *testing.T) {
 			outboxRetryBase:     "2s",
 			outboxRetryMax:      "30s",
 			want: config.Config{
-				AppName:             "order-system",
-				HTTPAddr:            ":8080",
-				ShutdownTimeout:     10 * time.Second,
-				ReadinessTimeout:    2 * time.Second,
-				StorageDriver:       config.StorageMemory,
-				AccessTokenTTL:      15 * time.Minute,
-				RefreshTokenTTL:     30 * 24 * time.Hour,
-				AuthRateWindow:      time.Minute,
-				LoginRateLimit:      10,
-				RefreshRateLimit:    30,
-				BcryptCost:          12,
-				OutboxPollInterval:  250 * time.Millisecond,
-				OutboxBatchSize:     5,
-				OutboxLeaseDuration: 10 * time.Second,
-				OutboxRetryBase:     2 * time.Second,
-				OutboxRetryMax:      30 * time.Second,
+				AppName:              "order-system",
+				HTTPAddr:             ":8080",
+				ShutdownTimeout:      10 * time.Second,
+				ReadinessTimeout:     2 * time.Second,
+				StorageDriver:        config.StorageMemory,
+				AccessTokenTTL:       15 * time.Minute,
+				RefreshTokenTTL:      30 * 24 * time.Hour,
+				AuthRateWindow:       time.Minute,
+				LoginRateLimit:       10,
+				RefreshRateLimit:     30,
+				BcryptCost:           12,
+				OutboxPollInterval:   250 * time.Millisecond,
+				OutboxBatchSize:      5,
+				OutboxLeaseDuration:  10 * time.Second,
+				OutboxRetryBase:      2 * time.Second,
+				OutboxRetryMax:       30 * time.Second,
+				PaymentPollInterval:  time.Second,
+				PaymentBatchSize:     10,
+				PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase:     time.Second,
+				PaymentRetryMax:      time.Minute,
+			},
+		},
+		{
+			name:                 "environment variables override payment worker",
+			paymentPollInterval:  "300ms",
+			paymentBatchSize:     "4",
+			paymentLeaseDuration: "15s",
+			paymentRetryBase:     "3s",
+			paymentRetryMax:      "45s",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				ShutdownTimeout: 10 * time.Second, ReadinessTimeout: 2 * time.Second,
+				StorageDriver: config.StorageMemory, AccessTokenTTL: 15 * time.Minute,
+				RefreshTokenTTL: 30 * 24 * time.Hour, AuthRateWindow: time.Minute,
+				LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second,
+				OutboxRetryMax: time.Minute, PaymentPollInterval: 300 * time.Millisecond,
+				PaymentBatchSize: 4, PaymentLeaseDuration: 15 * time.Second,
+				PaymentRetryBase: 3 * time.Second, PaymentRetryMax: 45 * time.Second,
 			},
 		},
 		{
@@ -221,6 +271,17 @@ func TestLoad(t *testing.T) {
 			outboxRetryMax:    "5s",
 			wantErrorContains: "OUTBOX_RETRY_MAX",
 		},
+		{
+			name:              "rejects zero payment batch size",
+			paymentBatchSize:  "0",
+			wantErrorContains: "PAYMENT_BATCH_SIZE",
+		},
+		{
+			name:              "rejects payment retry max below base",
+			paymentRetryBase:  "10s",
+			paymentRetryMax:   "5s",
+			wantErrorContains: "PAYMENT_RETRY_MAX",
+		},
 	}
 
 	for _, tt := range tests {
@@ -244,6 +305,11 @@ func TestLoad(t *testing.T) {
 			t.Setenv("OUTBOX_LEASE_DURATION", tt.outboxLeaseDuration)
 			t.Setenv("OUTBOX_RETRY_BASE", tt.outboxRetryBase)
 			t.Setenv("OUTBOX_RETRY_MAX", tt.outboxRetryMax)
+			t.Setenv("PAYMENT_POLL_INTERVAL", tt.paymentPollInterval)
+			t.Setenv("PAYMENT_BATCH_SIZE", tt.paymentBatchSize)
+			t.Setenv("PAYMENT_LEASE_DURATION", tt.paymentLeaseDuration)
+			t.Setenv("PAYMENT_RETRY_BASE", tt.paymentRetryBase)
+			t.Setenv("PAYMENT_RETRY_MAX", tt.paymentRetryMax)
 
 			got, err := config.Load()
 
