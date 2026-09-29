@@ -25,13 +25,19 @@ type Services struct {
 	Auth    *authapp.Service
 	Orders  *orderapp.Service
 
-	closer io.Closer
+	readiness dependencyPinger
+	closer    io.Closer
+}
+
+type dependencyPinger interface {
+	PingContext(context.Context) error
 }
 
 func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	var products catalogapp.Repository
 	var identities authapp.Store
 	var orders orderapp.Store
+	var readiness dependencyPinger
 	var closer io.Closer
 
 	switch cfg.StorageDriver {
@@ -58,6 +64,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			return nil, err
 		}
 		closer = db
+		readiness = db
 		products = postgres.NewCatalogRepository(db)
 		identities = postgres.NewIdentityStore(db)
 		orders = postgres.NewOrderStore(db)
@@ -83,8 +90,21 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			idgenerator.Random{},
 			clock.System{},
 		),
-		closer: closer,
+		readiness: readiness,
+		closer:    closer,
 	}, nil
+}
+
+// CheckReadiness 检查当前实例处理业务请求所依赖的外部资源。
+// 内存模式没有外部依赖，因此直接就绪；PostgreSQL 模式会实际 Ping 连接池。
+func (s *Services) CheckReadiness(ctx context.Context) error {
+	if s.readiness == nil {
+		return nil
+	}
+	if err := s.readiness.PingContext(ctx); err != nil {
+		return fmt.Errorf("check storage readiness: %w", err)
+	}
+	return nil
 }
 
 func (s *Services) Close() error {

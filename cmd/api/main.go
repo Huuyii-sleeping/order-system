@@ -12,6 +12,7 @@ import (
 
 	"example.com/order-system/internal/app"
 	"example.com/order-system/internal/config"
+	platformmetrics "example.com/order-system/internal/platform/metrics"
 	"example.com/order-system/internal/transport/httpapi"
 )
 
@@ -39,18 +40,25 @@ func main() {
 	}
 	defer services.Close()
 
-	router := httpapi.NewRouterWithAuthSecurity(
+	metricRegistry := platformmetrics.NewRegistry()
+	router := httpapi.NewRouterWithConfig(
 		services.Catalog,
 		services.Auth,
 		services.Orders,
-		httpapi.AuthSecurityConfig{
-			SecureCookies: cfg.SecureCookies,
-			LoginLimiter: httpapi.NewFixedWindowRateLimiter(
-				cfg.LoginRateLimit, cfg.AuthRateWindow,
-			),
-			RefreshLimiter: httpapi.NewFixedWindowRateLimiter(
-				cfg.RefreshRateLimit, cfg.AuthRateWindow,
-			),
+		httpapi.RouterConfig{
+			Readiness:        services,
+			ReadinessTimeout: cfg.ReadinessTimeout,
+			MetricsHandler:   metricRegistry.Handler(),
+			Logger:           logger,
+			AuthSecurity: httpapi.AuthSecurityConfig{
+				SecureCookies: cfg.SecureCookies,
+				LoginLimiter: httpapi.NewFixedWindowRateLimiter(
+					cfg.LoginRateLimit, cfg.AuthRateWindow,
+				),
+				RefreshLimiter: httpapi.NewFixedWindowRateLimiter(
+					cfg.RefreshRateLimit, cfg.AuthRateWindow,
+				),
+			},
 		},
 	)
 
@@ -67,7 +75,10 @@ func main() {
 	handler := httpapi.WithRequestID(
 		httpapi.WithAccessLog(
 			logger,
-			httpapi.WithRecovery(logger, router),
+			httpapi.WithHTTPMetrics(
+				metricRegistry,
+				httpapi.WithRecovery(logger, router),
+			),
 		),
 	)
 

@@ -85,6 +85,7 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/adapters/memory/`：提供默认的进程内存实现。
 - `internal/adapters/postgres/`：提供连接池、商品查询、订单事务和迁移实现。
 - `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API，认证中间件将可信用户 ID 写入 Context。
+- `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程和 HTTP 请求指标。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。
 - `internal/app/`：根据配置选择存储适配器并完成依赖组装。
 

@@ -17,6 +17,19 @@ import (
 // 将 Header 名称定义成常量，避免不同 Handler 之间出现拼写不一致。
 const RequestIDHeader = "X-Request-ID"
 
+const unmatchedRoute = "unmatched"
+
+type metricRouteContextKey struct{}
+
+type metricRouteState struct {
+	pattern string
+}
+
+type HTTPMetrics interface {
+	RequestStarted()
+	RequestFinished(method string, route string, statusCode int, duration time.Duration)
+}
+
 // requestIDContextKey 是 Context 中保存请求 ID 的私有 key 类型。
 //
 // 不使用普通字符串作为 key，可以避免当前包和其他包使用相同字符串
@@ -85,6 +98,55 @@ func WithAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
 			"bytes", recorder.bytesWritten,
 			"duration", time.Since(startedAt),
 		)
+	})
+}
+
+// WithHTTPMetrics 统计所有 HTTP 请求的并发量、数量和耗时。
+// 路由标签使用 ServeMux 匹配后的 Pattern，而不是原始 URL，避免动态 ID
+// 造成无法控制的时间序列数量。
+func WithHTTPMetrics(metrics HTTPMetrics, next http.Handler) http.Handler {
+	if metrics == nil {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w}
+		routeState := &metricRouteState{}
+		metrics.RequestStarted()
+
+		defer func() {
+			statusCode := recorder.statusCode
+			if statusCode == 0 {
+				statusCode = http.StatusOK
+			}
+			metrics.RequestFinished(
+				r.Method, metricRoute(routeState.pattern), statusCode, time.Since(startedAt),
+			)
+		}()
+
+		ctx := context.WithValue(r.Context(), metricRouteContextKey{}, routeState)
+		next.ServeHTTP(recorder, r.WithContext(ctx))
+	})
+}
+
+func metricRoute(pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return unmatchedRoute
+	}
+	if _, route, found := strings.Cut(pattern, " "); found {
+		return route
+	}
+	return pattern
+}
+
+func withMatchedRoute(next *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if state, ok := r.Context().Value(metricRouteContextKey{}).(*metricRouteState); ok {
+			_, state.pattern = next.Handler(r)
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

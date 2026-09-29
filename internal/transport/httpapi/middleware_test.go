@@ -7,9 +7,31 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"example.com/order-system/internal/transport/httpapi"
 )
+
+type HTTPMetricsStub struct {
+	started    int
+	method     string
+	route      string
+	statusCode int
+	duration   time.Duration
+}
+
+func (s *HTTPMetricsStub) RequestStarted() {
+	s.started++
+}
+
+func (s *HTTPMetricsStub) RequestFinished(
+	method string, route string, statusCode int, duration time.Duration,
+) {
+	s.method = method
+	s.route = route
+	s.statusCode = statusCode
+	s.duration = duration
+}
 
 func TestAccessLogRecordsRequestDetails(t *testing.T) {
 	var logBuffer bytes.Buffer
@@ -53,5 +75,41 @@ func TestAccessLogRecordsRequestDetails(t *testing.T) {
 		if !strings.Contains(logOutput, want) {
 			t.Errorf("log output = %q, want it to contain %q", logOutput, want)
 		}
+	}
+}
+
+func TestHTTPMetricsUsesMatchedRoutePattern(t *testing.T) {
+	metrics := &HTTPMetricsStub{}
+	router := httpapi.NewRouter(
+		catalogQueriesStub{}, authenticatedAs("customer-1"), &orderUseCasesStub{},
+	)
+	request := httptest.NewRequest(http.MethodGet, "/orders/order-123", nil)
+	request.Header.Set("Authorization", "Bearer access-token")
+	response := httptest.NewRecorder()
+
+	httpapi.WithHTTPMetrics(metrics, router).ServeHTTP(response, request)
+
+	if metrics.started != 1 {
+		t.Errorf("started requests = %d, want 1", metrics.started)
+	}
+	if metrics.method != http.MethodGet || metrics.route != "/orders/{orderID}" {
+		t.Errorf("metric labels = %q %q, want GET /orders/{orderID}", metrics.method, metrics.route)
+	}
+	if metrics.statusCode != http.StatusOK || metrics.duration <= 0 {
+		t.Errorf("metric result = status %d, duration %s", metrics.statusCode, metrics.duration)
+	}
+}
+
+func TestHTTPMetricsBoundsUnknownRoutes(t *testing.T) {
+	metrics := &HTTPMetricsStub{}
+	request := httptest.NewRequest(http.MethodGet, "/unknown/customer-provided-value", nil)
+	response := httptest.NewRecorder()
+
+	httpapi.WithHTTPMetrics(
+		metrics, httpapi.NewRouter(catalogQueriesStub{}, nil, nil),
+	).ServeHTTP(response, request)
+
+	if metrics.route != "unmatched" || metrics.statusCode != http.StatusNotFound {
+		t.Errorf("metric result = route %q status %d", metrics.route, metrics.statusCode)
 	}
 }

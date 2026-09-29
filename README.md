@@ -15,6 +15,18 @@ go run ./cmd/api
 
 服务监听 `:8080`。进程退出后，内存中的订单会丢失。
 
+运行状态端点：
+
+- `GET /healthz`：liveness，只判断 HTTP 进程是否存活。
+- `GET /readyz`：readiness，检查当前实例依赖的存储是否可用。
+- `GET /metrics`：Prometheus 文本格式的进程与 HTTP 指标。
+
+```bash
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/readyz
+curl http://127.0.0.1:8080/metrics
+```
+
 ## 使用 Docker PostgreSQL
 
 前置条件：安装并启动 Docker Desktop，确保 `docker compose version`
@@ -103,6 +115,10 @@ curl -i -X POST http://127.0.0.1:8080/auth/refresh \
 登录和刷新接口默认按客户端连接地址进行单实例限流，超限返回
 `429 Too Many Requests` 和 `Retry-After`。HTTPS 部署必须将
 `SECURE_COOKIES` 设置为 `true`，本地 HTTP 开发保持 `false`。
+
+HTTP 指标按 Method、路由模板和状态码聚合，例如动态订单地址统一记录为
+`/orders/{orderID}`，不会把真实订单 ID 写入标签。`/metrics` 应只暴露给
+监控系统或受保护的内部网络，不应直接开放到公网。
 
 相同参数和 `Idempotency-Key` 重试时会返回原订单，不会重复扣库存。
 同一个用户用同一个 Key 携带不同参数时返回 `409 Conflict`。不同用户的

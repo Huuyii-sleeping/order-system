@@ -7,7 +7,9 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"time"
 
 	authapp "example.com/order-system/internal/application/auth"
 	orderapp "example.com/order-system/internal/application/order"
@@ -50,6 +52,18 @@ type AuthSecurityConfig struct {
 	RefreshLimiter RequestRateLimiter
 }
 
+type ReadinessChecker interface {
+	CheckReadiness(context.Context) error
+}
+
+type RouterConfig struct {
+	AuthSecurity     AuthSecurityConfig
+	Readiness        ReadinessChecker
+	ReadinessTimeout time.Duration
+	MetricsHandler   http.Handler
+	Logger           *slog.Logger
+}
+
 // NewRouter 创建 API 使用的 HTTP 路由。
 //
 // 返回 http.Handler 而不是具体的 *http.ServeMux，
@@ -71,16 +85,35 @@ func NewRouterWithAuthSecurity(
 	orderUseCases OrderUseCases,
 	security AuthSecurityConfig,
 ) http.Handler {
+	return NewRouterWithConfig(
+		catalogQueries, authUseCases, orderUseCases,
+		RouterConfig{AuthSecurity: security},
+	)
+}
+
+func NewRouterWithConfig(
+	catalogQueries CatalogQueries,
+	authUseCases AuthUseCases,
+	orderUseCases OrderUseCases,
+	config RouterConfig,
+) http.Handler {
 	mux := http.NewServeMux()
 
 	// Go 1.22 之后可以在路由模式中同时声明 Method 和 Path。
 	// 因此 POST /healthz 会由标准库自动返回 405 Method Not Allowed。
 	mux.HandleFunc("GET /healthz", healthHandler)
+	mux.Handle("GET /readyz", newReadinessHandler(
+		config.Readiness, config.ReadinessTimeout, config.Logger,
+	))
+	if config.MetricsHandler != nil {
+		mux.Handle("GET /metrics", config.MetricsHandler)
+	}
 
 	catalogHandler := newCatalogHandler(catalogQueries)
 	mux.HandleFunc("GET /products", catalogHandler.list)
 	mux.HandleFunc("GET /products/{productID}", catalogHandler.getByID)
 
+	security := config.AuthSecurity
 	authHandler := newAuthHandler(authUseCases, security.SecureCookies)
 	mux.HandleFunc("POST /auth/register", authHandler.register)
 	mux.Handle("POST /auth/login", WithRateLimit(
@@ -100,13 +133,12 @@ func NewRouterWithAuthSecurity(
 	//
 	// Request ID、访问日志等横切能力由应用组装层统一包装，
 	// 这样中间件顺序会在一个地方清晰可见。
-	return mux
+	return withMatchedRoute(mux)
 }
 
 // healthHandler 只表示当前进程是否存活并能处理 HTTP 请求。
 //
-// 它不检查数据库或 Redis；外部依赖的可用性属于 readiness，
-// 后面接入外部依赖时会单独实现。
+// 它不检查数据库或 Redis；外部依赖的可用性由 /readyz 判断。
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	// 这个响应只包含可编码的字符串，编码失败通常只可能来自
 	// 客户端断开等写入问题。后面加入访问日志时再统一记录写入错误。

@@ -21,6 +21,7 @@ func TestLoad(t *testing.T) {
 		appName          string
 		httpAddr         string
 		shutdownTimeout  string
+		readinessTimeout string
 		storageDriver    string
 		databaseURL      string
 		accessTokenTTL   string
@@ -42,6 +43,7 @@ func TestLoad(t *testing.T) {
 				AppName:          "order-system",
 				HTTPAddr:         ":8080",
 				ShutdownTimeout:  10 * time.Second,
+				ReadinessTimeout: 2 * time.Second,
 				StorageDriver:    config.StorageMemory,
 				AccessTokenTTL:   15 * time.Minute,
 				RefreshTokenTTL:  30 * 24 * time.Hour,
@@ -59,6 +61,7 @@ func TestLoad(t *testing.T) {
 				AppName:          "order-system",
 				HTTPAddr:         ":8080",
 				ShutdownTimeout:  10 * time.Second,
+				ReadinessTimeout: 2 * time.Second,
 				StorageDriver:    config.StorageMemory,
 				AccessTokenTTL:   5 * time.Minute,
 				RefreshTokenTTL:  12 * time.Hour,
@@ -79,6 +82,7 @@ func TestLoad(t *testing.T) {
 				AppName:          "checkout-service",
 				HTTPAddr:         ":9090",
 				ShutdownTimeout:  30 * time.Second,
+				ReadinessTimeout: 2 * time.Second,
 				StorageDriver:    config.StoragePostgres,
 				DatabaseURL:      "postgres://localhost/order_system",
 				AccessTokenTTL:   15 * time.Minute,
@@ -99,6 +103,7 @@ func TestLoad(t *testing.T) {
 				AppName:          "order-system",
 				HTTPAddr:         ":8080",
 				ShutdownTimeout:  10 * time.Second,
+				ReadinessTimeout: 2 * time.Second,
 				StorageDriver:    config.StorageMemory,
 				AccessTokenTTL:   15 * time.Minute,
 				RefreshTokenTTL:  30 * 24 * time.Hour,
@@ -123,6 +128,11 @@ func TestLoad(t *testing.T) {
 			name:              "rejects a negative shutdown timeout",
 			shutdownTimeout:   "-5s",
 			wantErrorContains: "must be greater than zero",
+		},
+		{
+			name:              "rejects zero readiness timeout",
+			readinessTimeout:  "0s",
+			wantErrorContains: "READINESS_TIMEOUT",
 		},
 		{
 			name:              "rejects unsupported storage driver",
@@ -158,6 +168,7 @@ func TestLoad(t *testing.T) {
 			t.Setenv("APP_NAME", tt.appName)
 			t.Setenv("HTTP_ADDR", tt.httpAddr)
 			t.Setenv("SHUTDOWN_TIMEOUT", tt.shutdownTimeout)
+			t.Setenv("READINESS_TIMEOUT", tt.readinessTimeout)
 			t.Setenv("STORAGE_DRIVER", tt.storageDriver)
 			t.Setenv("DATABASE_URL", tt.databaseURL)
 			t.Setenv("ACCESS_TOKEN_TTL", tt.accessTokenTTL)

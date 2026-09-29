@@ -18,7 +18,8 @@ type Config struct {
 
 	HTTPAddr string
 
-	ShutdownTimeout time.Duration
+	ShutdownTimeout  time.Duration
+	ReadinessTimeout time.Duration
 
 	StorageDriver string
 	DatabaseURL   string
@@ -37,6 +38,7 @@ func Load() (Config, error) {
 		AppName:          envOrDefault("APP_NAME", "order-system"),
 		HTTPAddr:         envOrDefault("HTTP_ADDR", ":8080"),
 		ShutdownTimeout:  10 * time.Second,
+		ReadinessTimeout: 2 * time.Second,
 		StorageDriver:    strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
 		AccessTokenTTL:   15 * time.Minute,
@@ -63,6 +65,7 @@ func Load() (Config, error) {
 		target *time.Duration
 	}{
 		{name: "SHUTDOWN_TIMEOUT", target: &cfg.ShutdownTimeout},
+		{name: "READINESS_TIMEOUT", target: &cfg.ReadinessTimeout},
 		{name: "ACCESS_TOKEN_TTL", target: &cfg.AccessTokenTTL},
 		{name: "REFRESH_TOKEN_TTL", target: &cfg.RefreshTokenTTL},
 		{name: "AUTH_RATE_WINDOW", target: &cfg.AuthRateWindow},
