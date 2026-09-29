@@ -88,7 +88,9 @@ func TestIntegrationKafkaPublishesConsumesAndCommits(t *testing.T) {
 
 	handler := &recordingMessageHandler{targetID: messageID}
 	consumer, err := NewKafkaConsumer(KafkaConsumerConfig{
-		Brokers: brokers, GroupID: group, Topics: []string{topic}, RetryInterval: 10 * time.Millisecond,
+		Brokers: brokers, GroupID: group, Topics: []string{topic},
+		DeadLetterTopic: "orders.created.v1.integration.dlq", MaxAttempts: 3,
+		RetryInterval: 10 * time.Millisecond,
 	}, map[string]MessageHandler{topic: handler}, nil)
 	if err != nil {
 		t.Fatalf("NewKafkaConsumer() error = %v", err)
@@ -123,6 +125,139 @@ func TestIntegrationKafkaPublishesConsumesAndCommits(t *testing.T) {
 	}
 	if got := handler.count(); got != 2 {
 		t.Fatalf("handled messages = %d, want 2", got)
+	}
+
+	stopConsumer()
+	select {
+	case err := <-consumerDone:
+		if err != nil {
+			t.Fatalf("consumer.Run() error = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("wait for consumer shutdown: %v", ctx.Err())
+	}
+}
+
+type poisonThenSuccessHandler struct {
+	mu           sync.Mutex
+	poisonID     string
+	successID    string
+	poisonCalls  int
+	successCalls int
+}
+
+func (h *poisonThenSuccessHandler) Handle(_ context.Context, message outbox.Message) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch message.ID {
+	case h.poisonID:
+		h.poisonCalls++
+		return fmt.Errorf("poison integration message")
+	case h.successID:
+		h.successCalls++
+	}
+	return nil
+}
+
+func (h *poisonThenSuccessHandler) counts() (int, int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.poisonCalls, h.successCalls
+}
+
+func TestIntegrationKafkaMovesPoisonRecordToDeadLetterAndContinues(t *testing.T) {
+	brokerValue := os.Getenv("TEST_KAFKA_BROKERS")
+	if strings.TrimSpace(brokerValue) == "" {
+		t.Skip("TEST_KAFKA_BROKERS is not set")
+	}
+	brokers := strings.Split(brokerValue, ",")
+	topic := "orders.created.v1.integration.poison"
+	dlqTopic := "orders.created.v1.integration.dlq"
+	testID := time.Now().UnixNano()
+	poisonID := fmt.Sprintf("integration-poison-%d", testID)
+	successID := fmt.Sprintf("integration-success-%d", testID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	publisher, err := NewKafkaPublisher(brokers)
+	if err != nil {
+		t.Fatalf("NewKafkaPublisher() error = %v", err)
+	}
+	t.Cleanup(func() { _ = publisher.Close() })
+
+	dlqClient, err := kgo.NewClient(
+		kgo.SeedBrokers(brokers...),
+		kgo.ConsumerGroup(fmt.Sprintf("order-system-dlq-observer-%d", testID)),
+		kgo.ConsumeTopics(dlqTopic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	if err != nil {
+		t.Fatalf("create DLQ observer: %v", err)
+	}
+	t.Cleanup(dlqClient.Close)
+
+	handler := &poisonThenSuccessHandler{poisonID: poisonID, successID: successID}
+	consumer, err := NewKafkaConsumer(KafkaConsumerConfig{
+		Brokers: brokers, GroupID: fmt.Sprintf("order-system-poison-%d", testID),
+		Topics: []string{topic}, DeadLetterTopic: dlqTopic, MaxAttempts: 2,
+		RetryInterval: 10 * time.Millisecond,
+	}, map[string]MessageHandler{topic: handler}, nil)
+	if err != nil {
+		t.Fatalf("NewKafkaConsumer() error = %v", err)
+	}
+	t.Cleanup(func() { _ = consumer.Close() })
+	committed := make(chan struct{}, 1)
+	consumer.client = &commitNotifyingClient{
+		client: consumer.kafkaClient, targetID: successID, committed: committed,
+	}
+	consumerContext, stopConsumer := context.WithCancel(ctx)
+	t.Cleanup(stopConsumer)
+	consumerDone := make(chan error, 1)
+	go func() { consumerDone <- consumer.Run(consumerContext) }()
+
+	for _, id := range []string{poisonID, successID} {
+		message, messageErr := outbox.NewMessage(
+			id, topic, "order-1", []byte(fmt.Sprintf(`{"message_id":%q}`, id)), time.Now(),
+		)
+		if messageErr != nil {
+			t.Fatalf("NewMessage(%q) error = %v", id, messageErr)
+		}
+		if err := publisher.Publish(ctx, message); err != nil {
+			t.Fatalf("Publish(%q) error = %v", id, err)
+		}
+	}
+
+	var deadLetter *kgo.Record
+	for deadLetter == nil && ctx.Err() == nil {
+		fetches := dlqClient.PollRecords(ctx, 10)
+		if err := fetches.Err(); err != nil {
+			t.Fatalf("poll DLQ: %v", err)
+		}
+		for _, record := range fetches.Records() {
+			messageID, headerErr := uniqueHeader(record.Headers, messageIDHeader)
+			if headerErr == nil && messageID == poisonID {
+				deadLetter = record
+				break
+			}
+		}
+	}
+	if deadLetter == nil {
+		t.Fatalf("wait for dead letter: %v", ctx.Err())
+	}
+	select {
+	case <-committed:
+	case <-ctx.Done():
+		t.Fatalf("wait for successful message offset commit: %v", ctx.Err())
+	}
+	poisonCalls, successCalls := handler.counts()
+	if poisonCalls != 2 || successCalls != 1 {
+		t.Fatalf("handler calls = poison:%d success:%d; want 2 and 1", poisonCalls, successCalls)
+	}
+	if got, err := uniqueHeader(deadLetter.Headers, originalTopicHeader); err != nil || got != topic {
+		t.Fatalf("DLQ original topic = %q, %v; want %q, nil", got, err, topic)
+	}
+	if got, err := uniqueHeader(deadLetter.Headers, deliveryAttemptsHeader); err != nil || got != "2" {
+		t.Fatalf("DLQ attempts = %q, %v; want 2, nil", got, err)
 	}
 
 	stopConsumer()

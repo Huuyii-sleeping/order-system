@@ -18,32 +18,34 @@ func TestLoad(t *testing.T) {
 
 		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
-		appName              string
-		httpAddr             string
-		shutdownTimeout      string
-		readinessTimeout     string
-		storageDriver        string
-		databaseURL          string
-		accessTokenTTL       string
-		refreshTokenTTL      string
-		secureCookies        string
-		authRateWindow       string
-		loginRateLimit       string
-		refreshRateLimit     string
-		outboxPollInterval   string
-		outboxBatchSize      string
-		outboxLeaseDuration  string
-		outboxRetryBase      string
-		outboxRetryMax       string
-		paymentPollInterval  string
-		paymentBatchSize     string
-		paymentLeaseDuration string
-		paymentRetryBase     string
-		paymentRetryMax      string
-		messageDriver        string
-		kafkaBrokers         string
-		kafkaConsumerGroup   string
-		kafkaConsumerRetry   string
+		appName                  string
+		httpAddr                 string
+		shutdownTimeout          string
+		readinessTimeout         string
+		storageDriver            string
+		databaseURL              string
+		accessTokenTTL           string
+		refreshTokenTTL          string
+		secureCookies            string
+		authRateWindow           string
+		loginRateLimit           string
+		refreshRateLimit         string
+		outboxPollInterval       string
+		outboxBatchSize          string
+		outboxLeaseDuration      string
+		outboxRetryBase          string
+		outboxRetryMax           string
+		paymentPollInterval      string
+		paymentBatchSize         string
+		paymentLeaseDuration     string
+		paymentRetryBase         string
+		paymentRetryMax          string
+		messageDriver            string
+		kafkaBrokers             string
+		kafkaConsumerGroup       string
+		kafkaDeadLetterTopic     string
+		kafkaConsumerMaxAttempts string
+		kafkaConsumerRetry       string
 
 		want              config.Config
 		wantErrorContains string
@@ -220,19 +222,22 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name:               "configures kafka messaging with postgres",
-			storageDriver:      config.StoragePostgres,
-			databaseURL:        "postgres://localhost/order_system",
-			messageDriver:      config.MessageKafka,
-			kafkaBrokers:       " broker-a:9092,broker-b:9092 ",
-			kafkaConsumerGroup: "payments-test",
-			kafkaConsumerRetry: "250ms",
+			name:                     "configures kafka messaging with postgres",
+			storageDriver:            config.StoragePostgres,
+			databaseURL:              "postgres://localhost/order_system",
+			messageDriver:            config.MessageKafka,
+			kafkaBrokers:             " broker-a:9092,broker-b:9092 ",
+			kafkaConsumerGroup:       "payments-test",
+			kafkaDeadLetterTopic:     "orders.created.v1.failed",
+			kafkaConsumerMaxAttempts: "5",
+			kafkaConsumerRetry:       "250ms",
 			want: config.Config{
 				AppName: "order-system", HTTPAddr: ":8080",
 				ShutdownTimeout: 10 * time.Second, ReadinessTimeout: 2 * time.Second,
 				StorageDriver: config.StoragePostgres, DatabaseURL: "postgres://localhost/order_system",
 				MessageDriver: config.MessageKafka, KafkaBrokers: " broker-a:9092,broker-b:9092 ",
-				KafkaConsumerGroup: "payments-test", KafkaConsumerRetry: 250 * time.Millisecond,
+				KafkaConsumerGroup: "payments-test", KafkaDeadLetterTopic: "orders.created.v1.failed",
+				KafkaConsumerMaxAttempts: 5, KafkaConsumerRetry: 250 * time.Millisecond,
 				AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 30 * 24 * time.Hour,
 				AuthRateWindow: time.Minute, LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
 				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
@@ -326,6 +331,20 @@ func TestLoad(t *testing.T) {
 			messageDriver:     config.MessageKafka,
 			wantErrorContains: "KAFKA_BROKERS",
 		},
+		{
+			name:                 "kafka requires dead letter topic",
+			storageDriver:        config.StoragePostgres,
+			databaseURL:          "postgres://localhost/order_system",
+			messageDriver:        config.MessageKafka,
+			kafkaBrokers:         "127.0.0.1:9092",
+			kafkaDeadLetterTopic: " ",
+			wantErrorContains:    "KAFKA_DEAD_LETTER_TOPIC",
+		},
+		{
+			name:                     "rejects zero kafka consumer attempts",
+			kafkaConsumerMaxAttempts: "0",
+			wantErrorContains:        "KAFKA_CONSUMER_MAX_ATTEMPTS",
+		},
 	}
 
 	for _, tt := range tests {
@@ -357,6 +376,8 @@ func TestLoad(t *testing.T) {
 			t.Setenv("MESSAGE_DRIVER", tt.messageDriver)
 			t.Setenv("KAFKA_BROKERS", tt.kafkaBrokers)
 			t.Setenv("KAFKA_CONSUMER_GROUP", tt.kafkaConsumerGroup)
+			t.Setenv("KAFKA_DEAD_LETTER_TOPIC", tt.kafkaDeadLetterTopic)
+			t.Setenv("KAFKA_CONSUMER_MAX_ATTEMPTS", tt.kafkaConsumerMaxAttempts)
 			t.Setenv("KAFKA_CONSUMER_RETRY", tt.kafkaConsumerRetry)
 
 			got, err := config.Load()
@@ -389,6 +410,14 @@ func TestLoad(t *testing.T) {
 			if want.MessageDriver == "" {
 				want.MessageDriver = config.MessageDirect
 				want.KafkaConsumerGroup = "order-system-payments-v1"
+			}
+			if want.KafkaDeadLetterTopic == "" {
+				want.KafkaDeadLetterTopic = "orders.created.v1.dlq"
+			}
+			if want.KafkaConsumerMaxAttempts == 0 {
+				want.KafkaConsumerMaxAttempts = 3
+			}
+			if want.KafkaConsumerRetry == 0 {
 				want.KafkaConsumerRetry = time.Second
 			}
 			if got != want {

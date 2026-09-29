@@ -63,8 +63,8 @@ make db-down
 ## 使用 Kafka/Redpanda 消息链路
 
 Kafka 模式需要持久化 Inbox，因此必须和 PostgreSQL 一起使用。启动完整基础设施、
-执行数据库迁移并创建三分区的 `orders.created.v1` Topic，以及隔离的集成测试
-Topic：
+执行数据库迁移并创建三分区的 `orders.created.v1` Topic、对应的
+`orders.created.v1.dlq` 死信 Topic，以及隔离的集成测试 Topic：
 
 ```bash
 make infra-up
@@ -158,6 +158,11 @@ HTTP 指标按 Method、路由模板和状态码聚合，例如动态订单地�
 再标记 Outbox 已发布。消费者只在本地业务事务成功后提交 offset。发布确认和
 offset 提交都存在崩溃窗口，因此整个链路仍是至少一次投递，下游通过 Inbox
 消息 ID 去重。订单 ID 作为 Kafka Record Key，使同一订单的事件进入同一分区。
+消费者每次取得一条消息后默认最多处理三次；仍然失败时，会把原始 Key、Value、业务
+信封、原 Topic/Partition/Offset、消费者组、失败时间和错误原因同步写入死信 Topic。
+只有 Broker 确认死信写入后才提交原消息 offset，因此毒消息不会永久阻塞后续消息。
+死信写入与原 offset 提交不是同一事务，提交失败时可能重新消费并产生重复死信；重放
+工具必须使用原 Topic/Partition/Offset 幂等处理，且应先修复根因并经过人工审核。
 
 支付消费者在同一个事务中写入 Inbox、创建 `pending` 支付和支付任务。另一个
 Worker 在事务外调用模拟支付 Provider，并用稳定的支付 ID 作为第三方幂等键。

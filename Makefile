@@ -26,7 +26,10 @@ db-down:
 broker-up:
 	docker compose up -d --wait redpanda
 	docker compose exec -T redpanda rpk topic create orders.created.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.dlq --partitions 3 --replicas 1 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.poison --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.dlq --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 
 broker-down:
 	docker compose stop redpanda
@@ -35,7 +38,10 @@ infra-up:
 	docker compose up -d --wait postgres redpanda
 	$(MAKE) db-migrate
 	docker compose exec -T redpanda rpk topic create orders.created.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.dlq --partitions 3 --replicas 1 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.poison --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.dlq --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 
 infra-down:
 	docker compose down
@@ -48,6 +54,8 @@ test-integration:
 
 test-kafka-integration:
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.poison --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
+	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.dlq --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 	TEST_KAFKA_BROKERS='127.0.0.1:19092' go test -race -count=1 ./internal/adapters/messaging
 
 run-postgres:

@@ -11,12 +11,18 @@ import (
 )
 
 type syncProducerStub struct {
-	record *kgo.Record
-	err    error
+	record  *kgo.Record
+	err     error
+	cancel  context.CancelFunc
+	produce int
 }
 
 func (s *syncProducerStub) ProduceSync(_ context.Context, records ...*kgo.Record) kgo.ProduceResults {
 	s.record = records[0]
+	s.produce++
+	if s.cancel != nil {
+		s.cancel()
+	}
 	return kgo.ProduceResults{{Record: records[0], Err: s.err}}
 }
 
@@ -66,7 +72,8 @@ func TestMessageFromRecordRejectsMissingEnvelopeHeaders(t *testing.T) {
 func TestNewKafkaConsumerRequiresHandlerForEveryTopic(t *testing.T) {
 	_, err := NewKafkaConsumer(KafkaConsumerConfig{
 		Brokers: []string{"127.0.0.1:9092"}, GroupID: "payments",
-		Topics: []string{"orders.created.v1"},
+		Topics: []string{"orders.created.v1"}, DeadLetterTopic: "orders.created.v1.dlq",
+		MaxAttempts: 3,
 	}, nil, nil)
 	if err == nil {
 		t.Fatal("NewKafkaConsumer() error = nil, want missing handler error")
@@ -137,6 +144,7 @@ func TestKafkaConsumerCommitsOnlyAfterHandlerSucceeds(t *testing.T) {
 	handler := &retryingHandler{}
 	consumer := &KafkaConsumer{
 		client: client, retryInterval: time.Millisecond,
+		maxAttempts: 2, deadLetterTopic: "orders.created.v1.dlq", groupID: "payments",
 		handlers: map[string]MessageHandler{message.Topic: handler},
 	}
 
@@ -146,8 +154,8 @@ func TestKafkaConsumerCommitsOnlyAfterHandlerSucceeds(t *testing.T) {
 	if handler.calls != 2 || client.commitCount != 1 {
 		t.Fatalf("handler calls = %d, commits = %d; want 2 and 1", handler.calls, client.commitCount)
 	}
-	if client.resetCount != 1 || client.allowCount != 3 {
-		t.Fatalf("offset resets = %d, rebalance allows = %d; want 1 and 3", client.resetCount, client.allowCount)
+	if client.resetCount != 0 || client.allowCount != 2 {
+		t.Fatalf("offset resets = %d, rebalance allows = %d; want 0 and 2", client.resetCount, client.allowCount)
 	}
 }
 
@@ -167,6 +175,7 @@ func TestKafkaConsumerReprocessesWhenOffsetCommitFails(t *testing.T) {
 	handler := &retryingHandler{calls: 1}
 	consumer := &KafkaConsumer{
 		client: client, retryInterval: time.Millisecond,
+		maxAttempts: 3, deadLetterTopic: "orders.created.v1.dlq", groupID: "payments",
 		handlers: map[string]MessageHandler{message.Topic: handler},
 	}
 
@@ -178,5 +187,80 @@ func TestKafkaConsumerReprocessesWhenOffsetCommitFails(t *testing.T) {
 	if handler.calls != 3 || client.commitCount != 2 || client.resetCount != 1 {
 		t.Fatalf("handler calls = %d, commits = %d, resets = %d; want 3, 2, 1",
 			handler.calls, client.commitCount, client.resetCount)
+	}
+}
+
+type failingHandler struct {
+	calls int
+	err   error
+}
+
+func (h *failingHandler) Handle(_ context.Context, _ outbox.Message) error {
+	h.calls++
+	return h.err
+}
+
+func TestKafkaConsumerMovesPoisonRecordToDeadLetterBeforeCommit(t *testing.T) {
+	message, _ := outbox.NewMessage(
+		"message-1", "orders.created.v1", "order-1", []byte(`{"broken":true}`), time.Now(),
+	)
+	record, _ := recordFromMessage(message)
+	record.Partition = 2
+	record.Offset = 17
+	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{
+		Topic: record.Topic, Partitions: []kgo.FetchPartition{{Records: []*kgo.Record{record}}},
+	}}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &consumerClientStub{fetches: []kgo.Fetches{fetches}, cancel: cancel}
+	dlq := &syncProducerStub{}
+	handler := &failingHandler{err: errors.New("invalid event schema")}
+	consumer := &KafkaConsumer{
+		client: client, dlqProducer: dlq, handlers: map[string]MessageHandler{message.Topic: handler},
+		groupID: "payments", deadLetterTopic: "orders.created.v1.dlq",
+		maxAttempts: 3, retryInterval: time.Millisecond,
+	}
+
+	if err := consumer.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if handler.calls != 3 || dlq.produce != 1 || client.commitCount != 1 {
+		t.Fatalf("handler calls = %d, DLQ produces = %d, commits = %d; want 3, 1, 1",
+			handler.calls, dlq.produce, client.commitCount)
+	}
+	if dlq.record.Topic != "orders.created.v1.dlq" || string(dlq.record.Value) != string(record.Value) {
+		t.Fatalf("dead letter record = %+v, want topic and original payload preserved", dlq.record)
+	}
+	if got, err := uniqueHeader(dlq.record.Headers, originalOffsetHeader); err != nil || got != "17" {
+		t.Fatalf("dead letter original offset = %q, %v; want 17, nil", got, err)
+	}
+	if got, err := uniqueHeader(dlq.record.Headers, deliveryAttemptsHeader); err != nil || got != "3" {
+		t.Fatalf("dead letter attempts = %q, %v; want 3, nil", got, err)
+	}
+}
+
+func TestKafkaConsumerDoesNotCommitWhenDeadLetterPublishFails(t *testing.T) {
+	message, _ := outbox.NewMessage(
+		"message-1", "orders.created.v1", "order-1", []byte(`{"broken":true}`), time.Now(),
+	)
+	record, _ := recordFromMessage(message)
+	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{
+		Topic: record.Topic, Partitions: []kgo.FetchPartition{{Records: []*kgo.Record{record}}},
+	}}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &consumerClientStub{fetches: []kgo.Fetches{fetches}}
+	dlq := &syncProducerStub{err: errors.New("broker unavailable"), cancel: cancel}
+	consumer := &KafkaConsumer{
+		client: client, dlqProducer: dlq, handlers: map[string]MessageHandler{
+			message.Topic: &failingHandler{err: errors.New("invalid event schema")},
+		},
+		groupID: "payments", deadLetterTopic: "orders.created.v1.dlq",
+		maxAttempts: 1, retryInterval: time.Millisecond,
+	}
+
+	if err := consumer.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if client.commitCount != 0 || client.resetCount != 1 {
+		t.Fatalf("commits = %d, offset resets = %d; want 0 and 1", client.commitCount, client.resetCount)
 	}
 }

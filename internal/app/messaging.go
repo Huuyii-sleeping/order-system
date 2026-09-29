@@ -48,8 +48,10 @@ func NewMessageRuntime(
 		}
 		consumer, err := messaging.NewKafkaConsumer(messaging.KafkaConsumerConfig{
 			Brokers: brokers, GroupID: cfg.KafkaConsumerGroup,
-			Topics:        []string{event.OrderCreatedV1Topic},
-			RetryInterval: cfg.KafkaConsumerRetry,
+			Topics:          []string{event.OrderCreatedV1Topic},
+			DeadLetterTopic: cfg.KafkaDeadLetterTopic,
+			MaxAttempts:     cfg.KafkaConsumerMaxAttempts,
+			RetryInterval:   cfg.KafkaConsumerRetry,
 		}, handlers, logger)
 		if err != nil {
 			_ = publisher.Close()

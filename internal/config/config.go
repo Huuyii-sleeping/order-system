@@ -27,10 +27,12 @@ type Config struct {
 	StorageDriver string
 	DatabaseURL   string
 
-	MessageDriver      string
-	KafkaBrokers       string
-	KafkaConsumerGroup string
-	KafkaConsumerRetry time.Duration
+	MessageDriver            string
+	KafkaBrokers             string
+	KafkaConsumerGroup       string
+	KafkaDeadLetterTopic     string
+	KafkaConsumerMaxAttempts int
+	KafkaConsumerRetry       time.Duration
 
 	AccessTokenTTL   time.Duration
 	RefreshTokenTTL  time.Duration
@@ -55,33 +57,35 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppName:              envOrDefault("APP_NAME", "order-system"),
-		HTTPAddr:             envOrDefault("HTTP_ADDR", ":8080"),
-		ShutdownTimeout:      10 * time.Second,
-		ReadinessTimeout:     2 * time.Second,
-		StorageDriver:        strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
-		DatabaseURL:          os.Getenv("DATABASE_URL"),
-		MessageDriver:        strings.ToLower(envOrDefault("MESSAGE_DRIVER", MessageDirect)),
-		KafkaBrokers:         os.Getenv("KAFKA_BROKERS"),
-		KafkaConsumerGroup:   envOrDefault("KAFKA_CONSUMER_GROUP", "order-system-payments-v1"),
-		KafkaConsumerRetry:   time.Second,
-		AccessTokenTTL:       15 * time.Minute,
-		RefreshTokenTTL:      30 * 24 * time.Hour,
-		SecureCookies:        false,
-		AuthRateWindow:       time.Minute,
-		LoginRateLimit:       10,
-		RefreshRateLimit:     30,
-		BcryptCost:           12,
-		OutboxPollInterval:   time.Second,
-		OutboxBatchSize:      20,
-		OutboxLeaseDuration:  30 * time.Second,
-		OutboxRetryBase:      time.Second,
-		OutboxRetryMax:       time.Minute,
-		PaymentPollInterval:  time.Second,
-		PaymentBatchSize:     10,
-		PaymentLeaseDuration: 30 * time.Second,
-		PaymentRetryBase:     time.Second,
-		PaymentRetryMax:      time.Minute,
+		AppName:                  envOrDefault("APP_NAME", "order-system"),
+		HTTPAddr:                 envOrDefault("HTTP_ADDR", ":8080"),
+		ShutdownTimeout:          10 * time.Second,
+		ReadinessTimeout:         2 * time.Second,
+		StorageDriver:            strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
+		DatabaseURL:              os.Getenv("DATABASE_URL"),
+		MessageDriver:            strings.ToLower(envOrDefault("MESSAGE_DRIVER", MessageDirect)),
+		KafkaBrokers:             os.Getenv("KAFKA_BROKERS"),
+		KafkaConsumerGroup:       envOrDefault("KAFKA_CONSUMER_GROUP", "order-system-payments-v1"),
+		KafkaDeadLetterTopic:     envOrDefault("KAFKA_DEAD_LETTER_TOPIC", "orders.created.v1.dlq"),
+		KafkaConsumerMaxAttempts: 3,
+		KafkaConsumerRetry:       time.Second,
+		AccessTokenTTL:           15 * time.Minute,
+		RefreshTokenTTL:          30 * 24 * time.Hour,
+		SecureCookies:            false,
+		AuthRateWindow:           time.Minute,
+		LoginRateLimit:           10,
+		RefreshRateLimit:         30,
+		BcryptCost:               12,
+		OutboxPollInterval:       time.Second,
+		OutboxBatchSize:          20,
+		OutboxLeaseDuration:      30 * time.Second,
+		OutboxRetryBase:          time.Second,
+		OutboxRetryMax:           time.Minute,
+		PaymentPollInterval:      time.Second,
+		PaymentBatchSize:         10,
+		PaymentLeaseDuration:     30 * time.Second,
+		PaymentRetryBase:         time.Second,
+		PaymentRetryMax:          time.Minute,
 	}
 
 	switch cfg.StorageDriver {
@@ -106,6 +110,9 @@ func Load() (Config, error) {
 		}
 		if strings.TrimSpace(cfg.KafkaConsumerGroup) == "" {
 			return Config{}, fmt.Errorf("KAFKA_CONSUMER_GROUP is required when MESSAGE_DRIVER is %q", MessageKafka)
+		}
+		if strings.TrimSpace(cfg.KafkaDeadLetterTopic) == "" {
+			return Config{}, fmt.Errorf("KAFKA_DEAD_LETTER_TOPIC is required when MESSAGE_DRIVER is %q", MessageKafka)
 		}
 	default:
 		return Config{}, fmt.Errorf("unsupported MESSAGE_DRIVER %q", cfg.MessageDriver)
@@ -160,6 +167,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.PaymentBatchSize = paymentBatchSize
+	kafkaConsumerMaxAttempts, err := loadPositiveInt("KAFKA_CONSUMER_MAX_ATTEMPTS", cfg.KafkaConsumerMaxAttempts)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.KafkaConsumerMaxAttempts = kafkaConsumerMaxAttempts
 	if cfg.OutboxRetryMax < cfg.OutboxRetryBase {
 		return Config{}, fmt.Errorf(
 			"OUTBOX_RETRY_MAX must be greater than or equal to OUTBOX_RETRY_BASE",

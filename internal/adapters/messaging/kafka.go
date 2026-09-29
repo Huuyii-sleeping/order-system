@@ -81,21 +81,27 @@ type kafkaConsumerClient interface {
 }
 
 type KafkaConsumerConfig struct {
-	Brokers       []string
-	GroupID       string
-	Topics        []string
-	RetryInterval time.Duration
+	Brokers         []string
+	GroupID         string
+	Topics          []string
+	DeadLetterTopic string
+	MaxAttempts     int
+	RetryInterval   time.Duration
 }
 
 // KafkaConsumer 使用消费者组读取消息，并且只在 Handler 成功后提交 offset。
 // Handler 失败时会重试当前记录，因此业务提交和 offset 提交之间仍是至少一次语义；
 // 真正防止重复业务效果的是 Handler 内持久化的 Inbox，而不是 Kafka offset。
 type KafkaConsumer struct {
-	client        kafkaConsumerClient
-	kafkaClient   *kgo.Client
-	handlers      map[string]MessageHandler
-	retryInterval time.Duration
-	logger        *slog.Logger
+	client          kafkaConsumerClient
+	kafkaClient     *kgo.Client
+	dlqProducer     syncProducer
+	handlers        map[string]MessageHandler
+	groupID         string
+	deadLetterTopic string
+	maxAttempts     int
+	retryInterval   time.Duration
+	logger          *slog.Logger
 }
 
 func NewKafkaConsumer(
@@ -112,6 +118,10 @@ func NewKafkaConsumer(
 	if len(config.Topics) == 0 {
 		return nil, errors.New("at least one kafka topic is required")
 	}
+	config.DeadLetterTopic = strings.TrimSpace(config.DeadLetterTopic)
+	if config.DeadLetterTopic == "" {
+		return nil, errors.New("kafka dead letter topic is required")
+	}
 	for index, topic := range config.Topics {
 		topic = strings.TrimSpace(topic)
 		if topic == "" {
@@ -120,7 +130,13 @@ func NewKafkaConsumer(
 		if handler, ok := handlers[topic]; !ok || handler == nil {
 			return nil, fmt.Errorf("no handler for kafka topic %q", topic)
 		}
+		if topic == config.DeadLetterTopic {
+			return nil, fmt.Errorf("kafka dead letter topic %q must not be consumed as a business topic", topic)
+		}
 		config.Topics[index] = topic
+	}
+	if config.MaxAttempts <= 0 {
+		return nil, errors.New("kafka consumer max attempts must be greater than zero")
 	}
 	if config.RetryInterval <= 0 {
 		config.RetryInterval = time.Second
@@ -128,6 +144,7 @@ func NewKafkaConsumer(
 
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
+		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.ConsumerGroup(config.GroupID),
 		kgo.ConsumeTopics(config.Topics...),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -145,7 +162,8 @@ func NewKafkaConsumer(
 	}
 	return &KafkaConsumer{
 		client: client, kafkaClient: client, handlers: copiedHandlers,
-		retryInterval: config.RetryInterval, logger: logger,
+		dlqProducer: client, groupID: config.GroupID, deadLetterTopic: config.DeadLetterTopic,
+		maxAttempts: config.MaxAttempts, retryInterval: config.RetryInterval, logger: logger,
 	}, nil
 }
 
@@ -173,7 +191,21 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 		}
 
 		record := records[0]
-		err := c.handleRecord(ctx, record)
+		handlerErr, attempts := c.handleRecordWithRetry(ctx, record)
+		if ctx.Err() != nil {
+			c.client.AllowRebalance()
+			return nil
+		}
+
+		err := handlerErr
+		if handlerErr != nil {
+			// 达到有限重试次数后，把原始记录和失败上下文写入 DLQ。只有
+			// Broker 确认 DLQ 写入成功，才允许提交原消息 offset。
+			err = c.publishDeadLetter(ctx, record, attempts, handlerErr)
+			if err == nil {
+				c.logDeadLetter(ctx, record, attempts, handlerErr)
+			}
+		}
 		if err == nil {
 			err = c.client.CommitRecords(ctx, record)
 			if err != nil {
@@ -195,6 +227,43 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (c *KafkaConsumer) handleRecordWithRetry(
+	ctx context.Context, record *kgo.Record,
+) (error, int) {
+	for attempt := 1; attempt <= c.maxAttempts; attempt++ {
+		err := c.handleRecord(ctx, record)
+		if err == nil {
+			return nil, attempt
+		}
+		if attempt == c.maxAttempts {
+			return err, attempt
+		}
+		c.logRetry(ctx, record, attempt, err)
+		if !waitForRetry(ctx, c.retryInterval) {
+			return ctx.Err(), attempt
+		}
+	}
+	return errors.New("kafka record retry loop exhausted unexpectedly"), c.maxAttempts
+}
+
+func (c *KafkaConsumer) publishDeadLetter(
+	ctx context.Context, record *kgo.Record, attempts int, processingErr error,
+) error {
+	if c.dlqProducer == nil {
+		return errors.New("kafka dead letter producer is not initialized")
+	}
+	deadLetter, err := deadLetterRecord(
+		record, c.deadLetterTopic, c.groupID, attempts, processingErr, time.Now(),
+	)
+	if err != nil {
+		return err
+	}
+	if err := c.dlqProducer.ProduceSync(ctx, deadLetter).FirstErr(); err != nil {
+		return fmt.Errorf("produce kafka dead letter: %w", err)
+	}
+	return nil
 }
 
 func (c *KafkaConsumer) handleRecord(ctx context.Context, record *kgo.Record) error {
@@ -232,6 +301,30 @@ func (c *KafkaConsumer) logError(
 		)
 	}
 	c.logger.ErrorContext(ctx, message, attributes...)
+}
+
+func (c *KafkaConsumer) logRetry(
+	ctx context.Context, record *kgo.Record, attempt int, err error,
+) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.WarnContext(ctx, "kafka record handler will retry",
+		"error", err, "topic", record.Topic, "partition", record.Partition,
+		"offset", record.Offset, "attempt", attempt, "max_attempts", c.maxAttempts,
+	)
+}
+
+func (c *KafkaConsumer) logDeadLetter(
+	ctx context.Context, record *kgo.Record, attempts int, processingErr error,
+) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.WarnContext(ctx, "kafka record moved to dead letter topic",
+		"error", processingErr, "topic", record.Topic, "partition", record.Partition,
+		"offset", record.Offset, "attempts", attempts, "dead_letter_topic", c.deadLetterTopic,
+	)
 }
 
 func recordFromMessage(message outbox.Message) (*kgo.Record, error) {
