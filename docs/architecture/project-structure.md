@@ -96,6 +96,8 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API，认证中间件将可信用户 ID 写入 Context。
 - `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程、HTTP 请求
   和 Kafka 消费指标。
+- `deployments/local/observability/`：提供 Prometheus 抓取与告警规则、规则测试和
+  Grafana 自动配置；它只消费应用公开的指标，不反向依赖业务代码。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。
 - `internal/app/`：根据配置选择存储适配器并完成依赖组装。
 

@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: Order System
+    orgId: 1
+    folder: Order System
+    type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

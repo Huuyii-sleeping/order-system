@@ -164,6 +164,38 @@ Kafka 模式还会暴露以下消息指标：
 消息 ID 或错误文本，避免产生无法控制的 Prometheus 时间序列。Lag 是当前实例最近一次
 Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失时会删除对应序列。
 
+## 使用 Prometheus 和 Grafana
+
+应用在宿主机启动后，可以启动本地观测栈：
+
+```bash
+make observability-up
+```
+
+Prometheus 通过 `host.docker.internal:8080/metrics` 每 5 秒抓取应用指标，Grafana
+启动时自动配置 Prometheus 数据源并加载 `Order System Overview` 仪表盘：
+
+- Prometheus：<http://127.0.0.1:9090>
+- Prometheus 告警：<http://127.0.0.1:9090/alerts>
+- Grafana：<http://127.0.0.1:3000>，本地账号和密码均为 `admin`
+
+只检查 Prometheus 配置和告警规则，不启动长期运行的容器：
+
+```bash
+make observability-check
+```
+
+停止观测容器但保留本地时序数据和 Grafana 数据：
+
+```bash
+make observability-down
+```
+
+当前规则覆盖抓取失败、HTTP 5xx 比例、HTTP P95 延迟、Kafka Consumer Lag、
+Handler 失败、Offset 提交失败和死信发布。阈值是本地学习基线，生产环境应根据
+SLO、正常流量和故障预算调整。完整的启动、验证和故障模拟步骤见
+`docs/runbooks/local-observability.md`。
+
 创建订单时，订单、库存和 `orders.created.v1` Outbox 事件会在同一个事务中
 提交。后台 Worker 按批次认领事件并发布；失败后使用指数退避重试。默认的
 `direct` 模式会在进程内调用支付消费者；`kafka` 模式会等待 Broker 确认消息写入，

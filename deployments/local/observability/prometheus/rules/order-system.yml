@@ -1,0 +1,91 @@
+groups:
+  - name: order-system-availability
+    rules:
+      - alert: OrderSystemTargetDown
+        expr: up{job="order-system"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Order System cannot be scraped
+          description: Prometheus has been unable to scrape the Order System for one minute.
+
+      - alert: OrderSystemHighHTTPErrorRate
+        expr: |
+          (
+            sum(rate(order_system_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(order_system_http_requests_total[5m])), 0.001)
+          ) > 0.05
+          and
+          sum(rate(order_system_http_requests_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Order System HTTP 5xx rate is high
+          description: More than 5 percent of HTTP requests have returned 5xx for five minutes.
+
+      - alert: OrderSystemHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(order_system_http_request_duration_seconds_bucket[5m]))
+          ) > 0.5
+          and
+          sum(rate(order_system_http_request_duration_seconds_count[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Order System HTTP p95 latency is high
+          description: The overall HTTP p95 latency has exceeded 500 milliseconds for five minutes.
+
+  - name: order-system-kafka
+    rules:
+      - alert: OrderSystemKafkaConsumerLagHigh
+        expr: |
+          max by (consumer_group, topic) (
+            order_system_kafka_consumer_lag_records
+          ) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Order System Kafka consumer lag is high
+          description: A consumer group and topic have remained more than 100 records behind for five minutes.
+
+      - alert: OrderSystemKafkaProcessingFailures
+        expr: |
+          sum by (consumer_group, topic) (
+            increase(order_system_kafka_processing_attempts_total{outcome="failure"}[5m])
+          ) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Order System Kafka handler is failing
+          description: Kafka record handling failures have occurred during the last five minutes.
+
+      - alert: OrderSystemKafkaOffsetCommitFailures
+        expr: |
+          sum by (consumer_group, topic) (
+            increase(order_system_kafka_offset_commits_total{outcome="failure"}[5m])
+          ) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Order System Kafka offset commits are failing
+          description: Kafka offset commit failures have occurred during the last five minutes.
+
+      - alert: OrderSystemKafkaDeadLettersPublished
+        expr: |
+          sum by (consumer_group, topic) (
+            increase(order_system_kafka_dead_letters_published_total[5m])
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Order System published a Kafka dead letter
+          description: At least one record was isolated to a dead letter topic during the last five minutes.

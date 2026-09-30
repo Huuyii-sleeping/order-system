@@ -1,4 +1,4 @@
-.PHONY: fmt test race vet check db-up db-down db-migrate broker-up broker-down infra-up infra-down test-integration test-kafka-integration run-postgres run-kafka
+.PHONY: fmt test race vet check db-up db-down db-migrate broker-up broker-down infra-up infra-down observability-check observability-up observability-down test-integration test-kafka-integration run-postgres run-kafka
 
 DATABASE_URL ?= postgres://order_system:order_system@127.0.0.1:5432/order_system?sslmode=disable
 
@@ -45,6 +45,16 @@ infra-up:
 
 infra-down:
 	docker compose down
+
+observability-check:
+	docker compose run --rm --no-deps --entrypoint /bin/promtool prometheus check config /etc/prometheus/prometheus.yml
+	docker compose run --rm --no-deps --entrypoint /bin/promtool prometheus test rules /etc/prometheus/tests/order-system.test.yml
+
+observability-up: observability-check
+	docker compose up -d --wait prometheus grafana
+
+observability-down:
+	docker compose stop grafana prometheus
 
 db-migrate:
 	DATABASE_URL='$(DATABASE_URL)' go run ./cmd/migrate

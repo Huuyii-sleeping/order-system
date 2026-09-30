@@ -41,5 +41,5 @@ Kafka offset 不是业务幂等记录。以下崩溃窗口始终存在：
 当前只提供隔离和审计数据，没有自动重放；应在修复根因后通过受控工具人工重放。
 
 当前已经在 `/metrics` 暴露处理结果、重试、DLQ、offset 提交和 Consumer Lag，
-但没有提供 Prometheus Server 抓取配置、告警规则和仪表盘。本节也没有实现
-Schema Registry、认证加密和多 Broker 容灾。
+本地 Prometheus 会抓取这些指标，并提供告警规则和 Grafana 仪表盘。当前仍没有实现
+Alertmanager 通知、Schema Registry、认证加密和多 Broker 容灾。
