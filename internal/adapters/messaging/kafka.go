@@ -87,6 +87,18 @@ type KafkaConsumerConfig struct {
 	DeadLetterTopic string
 	MaxAttempts     int
 	RetryInterval   time.Duration
+	Metrics         KafkaConsumerMetrics
+}
+
+// KafkaConsumerMetrics 由平台层实现。消息适配器只报告固定维度的事实，
+// 不依赖 Prometheus 类型，也不把消息 ID 或错误文本作为高基数标签。
+type KafkaConsumerMetrics interface {
+	RecordProcessingAttempt(consumerGroup, topic, outcome string)
+	RecordRetry(consumerGroup, topic, reason string)
+	RecordDeadLetter(consumerGroup, topic string)
+	RecordOffsetCommit(consumerGroup, topic, outcome string)
+	SetConsumerLag(consumerGroup, topic string, partition int32, lag int64)
+	DeleteConsumerLag(consumerGroup, topic string, partition int32)
 }
 
 // KafkaConsumer 使用消费者组读取消息，并且只在 Handler 成功后提交 offset。
@@ -101,6 +113,7 @@ type KafkaConsumer struct {
 	deadLetterTopic string
 	maxAttempts     int
 	retryInterval   time.Duration
+	metrics         KafkaConsumerMetrics
 	logger          *slog.Logger
 }
 
@@ -141,6 +154,11 @@ func NewKafkaConsumer(
 	if config.RetryInterval <= 0 {
 		config.RetryInterval = time.Second
 	}
+	clearRevokedLag := func(
+		_ context.Context, _ *kgo.Client, partitions map[string][]int32,
+	) {
+		deleteConsumerLagMetrics(config.Metrics, config.GroupID, partitions)
+	}
 
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
@@ -149,6 +167,8 @@ func NewKafkaConsumer(
 		kgo.ConsumeTopics(config.Topics...),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
+		kgo.OnPartitionsRevoked(clearRevokedLag),
+		kgo.OnPartitionsLost(clearRevokedLag),
 		// 每次只处理一条记录，并在业务提交和 offset 提交完成后立即放行。
 		// 这样提交时分区仍属于当前实例，又不会跨多条任务长期阻塞 rebalance。
 		kgo.BlockRebalanceOnPoll(),
@@ -163,8 +183,22 @@ func NewKafkaConsumer(
 	return &KafkaConsumer{
 		client: client, kafkaClient: client, handlers: copiedHandlers,
 		dlqProducer: client, groupID: config.GroupID, deadLetterTopic: config.DeadLetterTopic,
-		maxAttempts: config.MaxAttempts, retryInterval: config.RetryInterval, logger: logger,
+		maxAttempts: config.MaxAttempts, retryInterval: config.RetryInterval,
+		metrics: config.Metrics, logger: logger,
 	}, nil
+}
+
+func deleteConsumerLagMetrics(
+	metrics KafkaConsumerMetrics, groupID string, partitions map[string][]int32,
+) {
+	if metrics == nil {
+		return
+	}
+	for topic, assignedPartitions := range partitions {
+		for _, partition := range assignedPartitions {
+			metrics.DeleteConsumerLag(groupID, topic, partition)
+		}
+	}
 }
 
 func (c *KafkaConsumer) Run(ctx context.Context) error {
@@ -191,6 +225,8 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 		}
 
 		record := records[0]
+		highWatermark := fetchHighWatermark(fetches, record)
+		c.setConsumerLag(record, highWatermark, false)
 		handlerErr, attempts := c.handleRecordWithRetry(ctx, record)
 		if ctx.Err() != nil {
 			c.client.AllowRebalance()
@@ -203,13 +239,21 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 			// Broker 确认 DLQ 写入成功，才允许提交原消息 offset。
 			err = c.publishDeadLetter(ctx, record, attempts, handlerErr)
 			if err == nil {
+				c.recordDeadLetter(record)
 				c.logDeadLetter(ctx, record, attempts, handlerErr)
+			} else {
+				c.recordRetry(record, "dead_letter_publish")
 			}
 		}
 		if err == nil {
 			err = c.client.CommitRecords(ctx, record)
 			if err != nil {
+				c.recordOffsetCommit(record, "failure")
+				c.recordRetry(record, "offset_commit")
 				err = fmt.Errorf("commit kafka offset: %w", err)
+			} else {
+				c.recordOffsetCommit(record, "success")
+				c.setConsumerLag(record, highWatermark, true)
 			}
 		}
 		if err != nil {
@@ -235,17 +279,68 @@ func (c *KafkaConsumer) handleRecordWithRetry(
 	for attempt := 1; attempt <= c.maxAttempts; attempt++ {
 		err := c.handleRecord(ctx, record)
 		if err == nil {
+			c.recordProcessingAttempt(record, "success")
 			return nil, attempt
 		}
+		c.recordProcessingAttempt(record, "failure")
 		if attempt == c.maxAttempts {
 			return err, attempt
 		}
 		c.logRetry(ctx, record, attempt, err)
+		c.recordRetry(record, "handler")
 		if !waitForRetry(ctx, c.retryInterval) {
 			return ctx.Err(), attempt
 		}
 	}
 	return errors.New("kafka record retry loop exhausted unexpectedly"), c.maxAttempts
+}
+
+func fetchHighWatermark(fetches kgo.Fetches, record *kgo.Record) int64 {
+	if record == nil {
+		return 0
+	}
+	var highWatermark int64
+	fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
+		if partition.Topic == record.Topic && partition.Partition == record.Partition {
+			highWatermark = partition.HighWatermark
+		}
+	})
+	return highWatermark
+}
+
+func (c *KafkaConsumer) recordProcessingAttempt(record *kgo.Record, outcome string) {
+	if c.metrics != nil && record != nil {
+		c.metrics.RecordProcessingAttempt(c.groupID, record.Topic, outcome)
+	}
+}
+
+func (c *KafkaConsumer) recordRetry(record *kgo.Record, reason string) {
+	if c.metrics != nil && record != nil {
+		c.metrics.RecordRetry(c.groupID, record.Topic, reason)
+	}
+}
+
+func (c *KafkaConsumer) recordDeadLetter(record *kgo.Record) {
+	if c.metrics != nil && record != nil {
+		c.metrics.RecordDeadLetter(c.groupID, record.Topic)
+	}
+}
+
+func (c *KafkaConsumer) recordOffsetCommit(record *kgo.Record, outcome string) {
+	if c.metrics != nil && record != nil {
+		c.metrics.RecordOffsetCommit(c.groupID, record.Topic, outcome)
+	}
+}
+
+func (c *KafkaConsumer) setConsumerLag(record *kgo.Record, highWatermark int64, committed bool) {
+	if c.metrics == nil || record == nil || highWatermark <= 0 {
+		return
+	}
+	nextOffset := record.Offset
+	if committed {
+		nextOffset++
+	}
+	c.metrics.SetConsumerLag(c.groupID, record.Topic, record.Partition, highWatermark-nextOffset)
 }
 
 func (c *KafkaConsumer) publishDeadLetter(

@@ -26,6 +26,7 @@ type MessageRuntime struct {
 
 func NewMessageRuntime(
 	ctx context.Context, cfg config.Config, services *Services, logger *slog.Logger,
+	metrics messaging.KafkaConsumerMetrics,
 ) (*MessageRuntime, error) {
 	handlers := map[string]messaging.MessageHandler{
 		event.OrderCreatedV1Topic: services.Payments,
@@ -52,6 +53,7 @@ func NewMessageRuntime(
 			DeadLetterTopic: cfg.KafkaDeadLetterTopic,
 			MaxAttempts:     cfg.KafkaConsumerMaxAttempts,
 			RetryInterval:   cfg.KafkaConsumerRetry,
+			Metrics:         metrics,
 		}, handlers, logger)
 		if err != nil {
 			_ = publisher.Close()

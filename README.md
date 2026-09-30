@@ -20,7 +20,7 @@ go run ./cmd/api
 
 - `GET /healthz`：liveness，只判断 HTTP 进程是否存活。
 - `GET /readyz`：readiness，检查当前实例依赖的存储是否可用。
-- `GET /metrics`：Prometheus 文本格式的进程与 HTTP 指标。
+- `GET /metrics`：Prometheus 文本格式的进程、HTTP 与消息指标。
 
 ```bash
 curl http://127.0.0.1:8080/healthz
@@ -151,6 +151,18 @@ curl -i -X POST http://127.0.0.1:8080/auth/refresh \
 HTTP 指标按 Method、路由模板和状态码聚合，例如动态订单地址统一记录为
 `/orders/{orderID}`，不会把真实订单 ID 写入标签。`/metrics` 应只暴露给
 监控系统或受保护的内部网络，不应直接开放到公网。
+
+Kafka 模式还会暴露以下消息指标：
+
+- `order_system_kafka_processing_attempts_total`：Handler 成功和失败次数。
+- `order_system_kafka_retries_total`：因 Handler、DLQ 发布或 offset 提交失败安排的重试。
+- `order_system_kafka_dead_letters_published_total`：成功写入 DLQ 的记录数。
+- `order_system_kafka_offset_commits_total`：同步提交 offset 的成功和失败次数。
+- `order_system_kafka_consumer_lag_records`：按 Topic/Partition 记录最近 Fetch 快照的积压。
+
+这些指标只使用 Consumer Group、Topic、Partition 和固定结果标签，不使用订单 ID、
+消息 ID 或错误文本，避免产生无法控制的 Prometheus 时间序列。Lag 是当前实例最近一次
+Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失时会删除对应序列。
 
 创建订单时，订单、库存和 `orders.created.v1` Outbox 事件会在同一个事务中
 提交。后台 Worker 按批次认领事件并发布；失败后使用指数退避重试。默认的

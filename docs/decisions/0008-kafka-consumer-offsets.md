@@ -40,4 +40,6 @@ Kafka offset 不是业务幂等记录。以下崩溃窗口始终存在：
 提交失败时可能再次生成死信，因此重放工具必须用原 Topic/Partition/Offset 去重。
 当前只提供隔离和审计数据，没有自动重放；应在修复根因后通过受控工具人工重放。
 
-本节没有实现 Schema Registry、认证加密、多 Broker 容灾和消费者积压/死信告警。
+当前已经在 `/metrics` 暴露处理结果、重试、DLQ、offset 提交和 Consumer Lag，
+但没有提供 Prometheus Server 抓取配置、告警规则和仪表盘。本节也没有实现
+Schema Registry、认证加密和多 Broker 容灾。

@@ -12,16 +12,21 @@
   重启进程，不能因为数据库短暂故障就反复重启正常的应用进程。
 - `/readyz` 使用有超时的 `PingContext` 检查当前存储。失败时返回 503，让负载
   均衡器停止向该实例转发流量；底层错误只记录在服务端日志。
-- `/metrics` 使用 Prometheus 文本协议暴露 Go Runtime、进程和 HTTP 指标。
+- `/metrics` 使用 Prometheus 文本协议暴露 Go Runtime、进程、HTTP 和 Kafka 消费指标。
 - HTTP 数量以 Method、路由模板、状态码为标签，耗时以 Method、路由模板为
   标签，同时记录当前请求数。动态 URL 使用 `/orders/{orderID}` 等模板，未知
   地址统一记为 `unmatched`。
+- Kafka 指标使用 Consumer Group、Topic、Partition 和固定枚举结果作为标签；消息 ID、
+  订单 ID 和错误文本不进入标签。指标覆盖处理尝试、重试原因、DLQ 发布、offset 提交
+  和基于最近 Fetch High Watermark 的 Partition Lag。
+- Consumer Lag 是当前实例的 Fetch 快照，不是额外向 Broker 查询的集群级实时值。
+  Partition 被 Rebalance 收回或丢失时删除对应时间序列，避免陈旧数据误导告警。
 - 指标注册表由组合根创建并注入 HTTP 层，测试使用独立注册表，避免全局注册器
   重复注册和测试相互污染。
 
 ## 边界
 
 当前 `/metrics` 与业务 API 共用端口，生产部署必须由网络策略或反向代理限制
-访问。Readiness 当前只有一个存储依赖；以后引入必需的消息系统时再加入检查。
-非关键依赖不应随意加入 Readiness，否则它的故障会让整个实例退出流量。当前
-指标只存在于本进程，Prometheus 抓取和长期存储不属于本应用职责。
+访问。Readiness 检查当前模式所需的 PostgreSQL 和 Kafka；非关键依赖不应随意加入，
+否则它的故障会让整个实例退出流量。当前指标只存在于本进程，Prometheus 抓取、
+告警规则、仪表盘和长期存储不属于本应用职责。

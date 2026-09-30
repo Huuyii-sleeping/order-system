@@ -87,10 +87,11 @@ func TestIntegrationKafkaPublishesConsumesAndCommits(t *testing.T) {
 	t.Cleanup(func() { _ = publisher.Close() })
 
 	handler := &recordingMessageHandler{targetID: messageID}
+	metrics := newKafkaMetricsStub()
 	consumer, err := NewKafkaConsumer(KafkaConsumerConfig{
 		Brokers: brokers, GroupID: group, Topics: []string{topic},
 		DeadLetterTopic: "orders.created.v1.integration.dlq", MaxAttempts: 3,
-		RetryInterval: 10 * time.Millisecond,
+		RetryInterval: 10 * time.Millisecond, Metrics: metrics,
 	}, map[string]MessageHandler{topic: handler}, nil)
 	if err != nil {
 		t.Fatalf("NewKafkaConsumer() error = %v", err)
@@ -135,6 +136,12 @@ func TestIntegrationKafkaPublishesConsumesAndCommits(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatalf("wait for consumer shutdown: %v", ctx.Err())
+	}
+	if metrics.processing["success"] < 2 || metrics.commits["success"] < 2 {
+		t.Fatalf("metrics = %+v; want at least two processing and commit successes", metrics)
+	}
+	if len(metrics.lags) == 0 || metrics.lags[len(metrics.lags)-1] != 0 {
+		t.Fatalf("lag observations = %v, want final lag 0", metrics.lags)
 	}
 }
 
@@ -197,10 +204,11 @@ func TestIntegrationKafkaMovesPoisonRecordToDeadLetterAndContinues(t *testing.T)
 	t.Cleanup(dlqClient.Close)
 
 	handler := &poisonThenSuccessHandler{poisonID: poisonID, successID: successID}
+	metrics := newKafkaMetricsStub()
 	consumer, err := NewKafkaConsumer(KafkaConsumerConfig{
 		Brokers: brokers, GroupID: fmt.Sprintf("order-system-poison-%d", testID),
 		Topics: []string{topic}, DeadLetterTopic: dlqTopic, MaxAttempts: 2,
-		RetryInterval: 10 * time.Millisecond,
+		RetryInterval: 10 * time.Millisecond, Metrics: metrics,
 	}, map[string]MessageHandler{topic: handler}, nil)
 	if err != nil {
 		t.Fatalf("NewKafkaConsumer() error = %v", err)
@@ -268,5 +276,10 @@ func TestIntegrationKafkaMovesPoisonRecordToDeadLetterAndContinues(t *testing.T)
 		}
 	case <-ctx.Done():
 		t.Fatalf("wait for consumer shutdown: %v", ctx.Err())
+	}
+	if metrics.processing["failure"] < 2 || metrics.processing["success"] < 1 ||
+		metrics.retries["handler"] < 1 || metrics.deadLetters < 1 ||
+		metrics.commits["success"] < 2 {
+		t.Fatalf("metrics = %+v; want poison failures, retry, DLQ and successful commits", metrics)
 	}
 }

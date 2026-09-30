@@ -30,6 +30,7 @@ func main() {
 		logger.Error("load config failed", "error", err)
 		os.Exit(1)
 	}
+	metricRegistry := platformmetrics.NewRegistry()
 
 	// main 是组合根：根据配置创建内存或 PostgreSQL 适配器，
 	// 再把应用服务注入 HTTP 层。
@@ -42,7 +43,9 @@ func main() {
 	}
 	defer services.Close()
 	messagingStartupContext, cancelMessagingStartup := context.WithTimeout(context.Background(), 10*time.Second)
-	messageRuntime, err := app.NewMessageRuntime(messagingStartupContext, cfg, services, logger)
+	messageRuntime, err := app.NewMessageRuntime(
+		messagingStartupContext, cfg, services, logger, metricRegistry,
+	)
 	cancelMessagingStartup()
 	if err != nil {
 		logger.Error("initialize messaging failed", "error", err)
@@ -93,7 +96,6 @@ func main() {
 		<-workerDone
 	}()
 
-	metricRegistry := platformmetrics.NewRegistry()
 	router := httpapi.NewRouterWithConfig(
 		services.Catalog,
 		services.Auth,

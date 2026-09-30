@@ -1,4 +1,4 @@
-// Package metrics 提供进程级和 HTTP 级 Prometheus 指标。
+// Package metrics 提供进程、HTTP 和消息链路的 Prometheus 指标。
 package metrics
 
 import (
@@ -12,10 +12,15 @@ import (
 )
 
 type Registry struct {
-	registry        *prometheus.Registry
-	httpRequests    *prometheus.CounterVec
-	httpDuration    *prometheus.HistogramVec
-	httpRequestsNow prometheus.Gauge
+	registry                *prometheus.Registry
+	httpRequests            *prometheus.CounterVec
+	httpDuration            *prometheus.HistogramVec
+	httpRequestsNow         prometheus.Gauge
+	kafkaProcessingAttempts *prometheus.CounterVec
+	kafkaRetries            *prometheus.CounterVec
+	kafkaDeadLetters        *prometheus.CounterVec
+	kafkaOffsetCommits      *prometheus.CounterVec
+	kafkaConsumerLag        *prometheus.GaugeVec
 }
 
 func NewRegistry() *Registry {
@@ -47,6 +52,46 @@ func NewRegistry() *Registry {
 			Name:      "requests_in_flight",
 			Help:      "Current number of HTTP requests being processed.",
 		}),
+		kafkaProcessingAttempts: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "kafka",
+				Name: "processing_attempts_total",
+				Help: "Total number of Kafka record processing attempts by outcome.",
+			},
+			[]string{"consumer_group", "topic", "outcome"},
+		),
+		kafkaRetries: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "kafka",
+				Name: "retries_total",
+				Help: "Total number of Kafka record retries scheduled by reason.",
+			},
+			[]string{"consumer_group", "topic", "reason"},
+		),
+		kafkaDeadLetters: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "kafka",
+				Name: "dead_letters_published_total",
+				Help: "Total number of records successfully published to a dead letter topic.",
+			},
+			[]string{"consumer_group", "topic"},
+		),
+		kafkaOffsetCommits: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "kafka",
+				Name: "offset_commits_total",
+				Help: "Total number of synchronous Kafka offset commit attempts by outcome.",
+			},
+			[]string{"consumer_group", "topic", "outcome"},
+		),
+		kafkaConsumerLag: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "order_system", Subsystem: "kafka",
+				Name: "consumer_lag_records",
+				Help: "Kafka consumer lag from the latest fetch high watermark snapshot.",
+			},
+			[]string{"consumer_group", "topic", "partition"},
+		),
 	}
 
 	registry.MustRegister(
@@ -55,8 +100,44 @@ func NewRegistry() *Registry {
 		metrics.httpRequests,
 		metrics.httpDuration,
 		metrics.httpRequestsNow,
+		metrics.kafkaProcessingAttempts,
+		metrics.kafkaRetries,
+		metrics.kafkaDeadLetters,
+		metrics.kafkaOffsetCommits,
+		metrics.kafkaConsumerLag,
 	)
 	return metrics
+}
+
+func (r *Registry) RecordProcessingAttempt(consumerGroup, topic, outcome string) {
+	r.kafkaProcessingAttempts.WithLabelValues(consumerGroup, topic, outcome).Inc()
+}
+
+func (r *Registry) RecordRetry(consumerGroup, topic, reason string) {
+	r.kafkaRetries.WithLabelValues(consumerGroup, topic, reason).Inc()
+}
+
+func (r *Registry) RecordDeadLetter(consumerGroup, topic string) {
+	r.kafkaDeadLetters.WithLabelValues(consumerGroup, topic).Inc()
+}
+
+func (r *Registry) RecordOffsetCommit(consumerGroup, topic, outcome string) {
+	r.kafkaOffsetCommits.WithLabelValues(consumerGroup, topic, outcome).Inc()
+}
+
+func (r *Registry) SetConsumerLag(consumerGroup, topic string, partition int32, lag int64) {
+	if lag < 0 {
+		lag = 0
+	}
+	r.kafkaConsumerLag.WithLabelValues(
+		consumerGroup, topic, strconv.FormatInt(int64(partition), 10),
+	).Set(float64(lag))
+}
+
+func (r *Registry) DeleteConsumerLag(consumerGroup, topic string, partition int32) {
+	r.kafkaConsumerLag.DeleteLabelValues(
+		consumerGroup, topic, strconv.FormatInt(int64(partition), 10),
+	)
 }
 
 func (r *Registry) RequestStarted() {

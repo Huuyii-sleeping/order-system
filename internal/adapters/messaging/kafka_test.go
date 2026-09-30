@@ -131,21 +131,59 @@ func (h *retryingHandler) Handle(_ context.Context, _ outbox.Message) error {
 	return nil
 }
 
+type kafkaMetricsStub struct {
+	processing  map[string]int
+	retries     map[string]int
+	deadLetters int
+	commits     map[string]int
+	lags        []int64
+	deletedLags []int32
+}
+
+func newKafkaMetricsStub() *kafkaMetricsStub {
+	return &kafkaMetricsStub{
+		processing: make(map[string]int), retries: make(map[string]int), commits: make(map[string]int),
+	}
+}
+
+func (m *kafkaMetricsStub) RecordProcessingAttempt(_, _, outcome string) {
+	m.processing[outcome]++
+}
+
+func (m *kafkaMetricsStub) RecordRetry(_, _, reason string) {
+	m.retries[reason]++
+}
+
+func (m *kafkaMetricsStub) RecordDeadLetter(_, _ string) { m.deadLetters++ }
+
+func (m *kafkaMetricsStub) RecordOffsetCommit(_, _, outcome string) {
+	m.commits[outcome]++
+}
+
+func (m *kafkaMetricsStub) SetConsumerLag(_ string, _ string, _ int32, lag int64) {
+	m.lags = append(m.lags, lag)
+}
+
+func (m *kafkaMetricsStub) DeleteConsumerLag(_ string, _ string, partition int32) {
+	m.deletedLags = append(m.deletedLags, partition)
+}
+
 func TestKafkaConsumerCommitsOnlyAfterHandlerSucceeds(t *testing.T) {
 	message, _ := outbox.NewMessage(
 		"message-1", "orders.created.v1", "order-1", []byte(`{"ok":true}`), time.Now(),
 	)
 	record, _ := recordFromMessage(message)
 	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{
-		Topic: record.Topic, Partitions: []kgo.FetchPartition{{Records: []*kgo.Record{record}}},
+		Topic: record.Topic, Partitions: []kgo.FetchPartition{{HighWatermark: 8, Records: []*kgo.Record{record}}},
 	}}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &consumerClientStub{fetches: []kgo.Fetches{fetches, fetches}, cancel: cancel}
 	handler := &retryingHandler{}
+	metrics := newKafkaMetricsStub()
 	consumer := &KafkaConsumer{
 		client: client, retryInterval: time.Millisecond,
 		maxAttempts: 2, deadLetterTopic: "orders.created.v1.dlq", groupID: "payments",
-		handlers: map[string]MessageHandler{message.Topic: handler},
+		handlers: map[string]MessageHandler{message.Topic: handler}, metrics: metrics,
 	}
 
 	if err := consumer.Run(ctx); err != nil {
@@ -157,6 +195,13 @@ func TestKafkaConsumerCommitsOnlyAfterHandlerSucceeds(t *testing.T) {
 	if client.resetCount != 0 || client.allowCount != 2 {
 		t.Fatalf("offset resets = %d, rebalance allows = %d; want 0 and 2", client.resetCount, client.allowCount)
 	}
+	if metrics.processing["failure"] != 1 || metrics.processing["success"] != 1 ||
+		metrics.retries["handler"] != 1 || metrics.commits["success"] != 1 {
+		t.Fatalf("metrics = %+v; want one failure, success, handler retry, and successful commit", metrics)
+	}
+	if len(metrics.lags) != 2 || metrics.lags[0] != 8 || metrics.lags[1] != 7 {
+		t.Fatalf("lag observations = %v, want [8 7]", metrics.lags)
+	}
 }
 
 func TestKafkaConsumerReprocessesWhenOffsetCommitFails(t *testing.T) {
@@ -164,8 +209,9 @@ func TestKafkaConsumerReprocessesWhenOffsetCommitFails(t *testing.T) {
 		"message-1", "orders.created.v1", "order-1", []byte(`{"ok":true}`), time.Now(),
 	)
 	record, _ := recordFromMessage(message)
+	record.Offset = 7
 	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{
-		Topic: record.Topic, Partitions: []kgo.FetchPartition{{Records: []*kgo.Record{record}}},
+		Topic: record.Topic, Partitions: []kgo.FetchPartition{{HighWatermark: 8, Records: []*kgo.Record{record}}},
 	}}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &consumerClientStub{
@@ -173,10 +219,11 @@ func TestKafkaConsumerReprocessesWhenOffsetCommitFails(t *testing.T) {
 		commitErrs: []error{errors.New("coordinator unavailable")},
 	}
 	handler := &retryingHandler{calls: 1}
+	metrics := newKafkaMetricsStub()
 	consumer := &KafkaConsumer{
 		client: client, retryInterval: time.Millisecond,
 		maxAttempts: 3, deadLetterTopic: "orders.created.v1.dlq", groupID: "payments",
-		handlers: map[string]MessageHandler{message.Topic: handler},
+		handlers: map[string]MessageHandler{message.Topic: handler}, metrics: metrics,
 	}
 
 	if err := consumer.Run(ctx); err != nil {
@@ -187,6 +234,11 @@ func TestKafkaConsumerReprocessesWhenOffsetCommitFails(t *testing.T) {
 	if handler.calls != 3 || client.commitCount != 2 || client.resetCount != 1 {
 		t.Fatalf("handler calls = %d, commits = %d, resets = %d; want 3, 2, 1",
 			handler.calls, client.commitCount, client.resetCount)
+	}
+	if metrics.commits["failure"] != 1 || metrics.commits["success"] != 1 ||
+		metrics.retries["offset_commit"] != 1 {
+		t.Fatalf("commit metrics = %+v, retries = %+v; want one failure, success, and retry",
+			metrics.commits, metrics.retries)
 	}
 }
 
@@ -208,16 +260,17 @@ func TestKafkaConsumerMovesPoisonRecordToDeadLetterBeforeCommit(t *testing.T) {
 	record.Partition = 2
 	record.Offset = 17
 	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{
-		Topic: record.Topic, Partitions: []kgo.FetchPartition{{Records: []*kgo.Record{record}}},
+		Topic: record.Topic, Partitions: []kgo.FetchPartition{{HighWatermark: 18, Records: []*kgo.Record{record}}},
 	}}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &consumerClientStub{fetches: []kgo.Fetches{fetches}, cancel: cancel}
 	dlq := &syncProducerStub{}
 	handler := &failingHandler{err: errors.New("invalid event schema")}
+	metrics := newKafkaMetricsStub()
 	consumer := &KafkaConsumer{
 		client: client, dlqProducer: dlq, handlers: map[string]MessageHandler{message.Topic: handler},
 		groupID: "payments", deadLetterTopic: "orders.created.v1.dlq",
-		maxAttempts: 3, retryInterval: time.Millisecond,
+		maxAttempts: 3, retryInterval: time.Millisecond, metrics: metrics,
 	}
 
 	if err := consumer.Run(ctx); err != nil {
@@ -236,6 +289,10 @@ func TestKafkaConsumerMovesPoisonRecordToDeadLetterBeforeCommit(t *testing.T) {
 	if got, err := uniqueHeader(dlq.record.Headers, deliveryAttemptsHeader); err != nil || got != "3" {
 		t.Fatalf("dead letter attempts = %q, %v; want 3, nil", got, err)
 	}
+	if metrics.processing["failure"] != 3 || metrics.retries["handler"] != 2 ||
+		metrics.deadLetters != 1 || metrics.commits["success"] != 1 {
+		t.Fatalf("metrics = %+v; want three failures, two retries, one DLQ and commit", metrics)
+	}
 }
 
 func TestKafkaConsumerDoesNotCommitWhenDeadLetterPublishFails(t *testing.T) {
@@ -249,12 +306,13 @@ func TestKafkaConsumerDoesNotCommitWhenDeadLetterPublishFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &consumerClientStub{fetches: []kgo.Fetches{fetches}}
 	dlq := &syncProducerStub{err: errors.New("broker unavailable"), cancel: cancel}
+	metrics := newKafkaMetricsStub()
 	consumer := &KafkaConsumer{
 		client: client, dlqProducer: dlq, handlers: map[string]MessageHandler{
 			message.Topic: &failingHandler{err: errors.New("invalid event schema")},
 		},
 		groupID: "payments", deadLetterTopic: "orders.created.v1.dlq",
-		maxAttempts: 1, retryInterval: time.Millisecond,
+		maxAttempts: 1, retryInterval: time.Millisecond, metrics: metrics,
 	}
 
 	if err := consumer.Run(ctx); err != nil {
@@ -262,5 +320,31 @@ func TestKafkaConsumerDoesNotCommitWhenDeadLetterPublishFails(t *testing.T) {
 	}
 	if client.commitCount != 0 || client.resetCount != 1 {
 		t.Fatalf("commits = %d, offset resets = %d; want 0 and 1", client.commitCount, client.resetCount)
+	}
+	if metrics.deadLetters != 0 || metrics.retries["dead_letter_publish"] != 1 || len(metrics.commits) != 0 {
+		t.Fatalf("metrics = %+v; want one DLQ publish retry and no DLQ success or offset commit", metrics)
+	}
+}
+
+func TestFetchHighWatermarkSelectsRecordPartition(t *testing.T) {
+	record := &kgo.Record{Topic: "orders.created.v1", Partition: 2}
+	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{
+		{Topic: record.Topic, Partitions: []kgo.FetchPartition{
+			{Partition: 1, HighWatermark: 9},
+			{Partition: 2, HighWatermark: 21},
+		}},
+	}}}
+	if got := fetchHighWatermark(fetches, record); got != 21 {
+		t.Fatalf("fetchHighWatermark() = %d, want 21", got)
+	}
+}
+
+func TestDeleteConsumerLagMetricsRemovesEveryRevokedPartition(t *testing.T) {
+	metrics := newKafkaMetricsStub()
+	deleteConsumerLagMetrics(metrics, "payments", map[string][]int32{
+		"orders.created.v1": {0, 2},
+	})
+	if len(metrics.deletedLags) != 2 || metrics.deletedLags[0] != 0 || metrics.deletedLags[1] != 2 {
+		t.Fatalf("deleted lag partitions = %v, want [0 2]", metrics.deletedLags)
 	}
 }
