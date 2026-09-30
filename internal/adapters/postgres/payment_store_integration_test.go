@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
+	"example.com/order-system/internal/domain/order"
 	"example.com/order-system/internal/domain/payment"
 )
 
@@ -57,10 +59,14 @@ func TestIntegrationInboxPaymentAndProviderRecovery(t *testing.T) {
 	}
 
 	paymentStore := postgres.NewPaymentStore(db)
+	orderStore := postgres.NewOrderStore(db)
 	paymentIDs := &sequenceIDGenerator{prefix: "payment"}
 	consumer := paymentapp.NewConsumer(paymentStore, paymentIDs, fixedClock{})
+	resultConsumer := orderapp.NewPaymentResultConsumer(orderStore, fixedClock{})
 	publisher := messaging.NewDirectPublisher(nil, map[string]messaging.MessageHandler{
-		orderapp.OrderCreatedTopic: consumer,
+		orderapp.OrderCreatedTopic:    consumer,
+		event.PaymentSucceededV1Topic: resultConsumer,
+		event.PaymentFailedV1Topic:    resultConsumer,
 	})
 	var messageID string
 	var payload []byte
@@ -143,6 +149,107 @@ func TestIntegrationInboxPaymentAndProviderRecovery(t *testing.T) {
 		provider.requests[0].IdempotencyKey != provider.requests[1].IdempotencyKey {
 		t.Fatalf("provider requests = %+v; want stable idempotency key", provider.requests)
 	}
+	if processed, err := outboxWorker.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("payment result outbox RunOnce() = %d, %v; want 1, nil", processed, err)
+	}
+	confirmed, err := orderStore.GetOrderByIDAndCustomerID(
+		ctx, createdOrder.Order.ID(), "payment-customer",
+	)
+	if err != nil || confirmed.Status() != order.StatusConfirmed {
+		t.Fatalf("order after payment = %+v, %v; want confirmed", confirmed, err)
+	}
+}
+
+type declinedPaymentProvider struct{}
+
+func (declinedPaymentProvider) Charge(
+	context.Context, paymentapp.ChargeRequest,
+) (paymentapp.ChargeResult, error) {
+	return paymentapp.ChargeResult{
+		Status: paymentapp.ChargeDeclined, Reason: "fixture decline",
+	}, nil
+}
+
+func TestIntegrationFailedPaymentCancelsOrderAndReleasesStockOnce(t *testing.T) {
+	databaseURL := integrationDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db := openMigratedIdentityTestDB(t, ctx, databaseURL)
+	seedIntegrationUsers(t, db, "failed-payment-customer")
+
+	orderService := newPostgresOrderService(
+		db, &sequenceIDGenerator{prefix: "failed-payment-source"},
+	)
+	created, err := orderService.CreateOrder(ctx, orderapp.CreateOrderCommand{
+		CustomerID: "failed-payment-customer", ProductID: "product-1",
+		Quantity: 2, IdempotencyKey: "failed-payment-key",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder() error = %v", err)
+	}
+
+	paymentStore := postgres.NewPaymentStore(db)
+	orderStore := postgres.NewOrderStore(db)
+	paymentConsumer := paymentapp.NewConsumer(
+		paymentStore, &sequenceIDGenerator{prefix: "failed-payment"}, fixedClock{},
+	)
+	resultConsumer := orderapp.NewPaymentResultConsumer(orderStore, fixedClock{})
+	publisher := messaging.NewDirectPublisher(nil, map[string]messaging.MessageHandler{
+		orderapp.OrderCreatedTopic:    paymentConsumer,
+		event.PaymentSucceededV1Topic: resultConsumer,
+		event.PaymentFailedV1Topic:    resultConsumer,
+	})
+	outboxWorker := outbox.NewWorker(
+		postgres.NewOutboxStore(db), publisher, nil,
+		outbox.WorkerConfig{BatchSize: 10, LeaseDuration: time.Second},
+	)
+	if processed, err := outboxWorker.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("order outbox RunOnce() = %d, %v", processed, err)
+	}
+	paymentWorker := paymentapp.NewWorker(
+		paymentStore, declinedPaymentProvider{}, nil,
+		paymentapp.WorkerConfig{BatchSize: 10, LeaseDuration: time.Second},
+	)
+	if processed, err := paymentWorker.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("payment RunOnce() = %d, %v", processed, err)
+	}
+	if processed, err := outboxWorker.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("payment result outbox RunOnce() = %d, %v", processed, err)
+	}
+
+	cancelled, err := orderStore.GetOrderByIDAndCustomerID(
+		ctx, created.Order.ID(), "failed-payment-customer",
+	)
+	if err != nil || cancelled.Status() != order.StatusCancelled {
+		t.Fatalf("order after decline = %+v, %v; want cancelled", cancelled, err)
+	}
+	if available := queryAvailable(t, db, "product-1"); available != 10 {
+		t.Fatalf("stock after compensation = %d, want 10", available)
+	}
+
+	var eventID string
+	var payload []byte
+	var occurredAt time.Time
+	if err := db.QueryRowContext(ctx, `
+		SELECT id, payload, occurred_at FROM outbox_messages
+		WHERE topic = $1 AND message_key = $2
+	`, event.PaymentFailedV1Topic, created.Order.ID()).Scan(
+		&eventID, &payload, &occurredAt,
+	); err != nil {
+		t.Fatalf("query failed payment event: %v", err)
+	}
+	redelivery, err := outbox.NewMessage(
+		eventID, event.PaymentFailedV1Topic, created.Order.ID(), payload, occurredAt,
+	)
+	if err != nil {
+		t.Fatalf("restore failed payment event: %v", err)
+	}
+	if err := publisher.Publish(ctx, redelivery); err != nil {
+		t.Fatalf("duplicate failed event: %v", err)
+	}
+	if available := queryAvailable(t, db, "product-1"); available != 10 {
+		t.Fatalf("stock after duplicate event = %d, want 10", available)
+	}
 }
 
 func TestIntegrationPaymentConsumerTransactionRollsBack(t *testing.T) {
@@ -197,6 +304,84 @@ func TestIntegrationPaymentConsumerTransactionRollsBack(t *testing.T) {
 	if inboxCount != 0 || paymentCount != 0 || taskCount != 0 {
 		t.Fatalf("rolled-back inbox/payment/task = %d/%d/%d; want 0/0/0",
 			inboxCount, paymentCount, taskCount)
+	}
+}
+
+func TestIntegrationPaymentCompletionRollsBackWhenOutboxWriteFails(t *testing.T) {
+	databaseURL := integrationDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db := openMigratedIdentityTestDB(t, ctx, databaseURL)
+	seedIntegrationUsers(t, db, "atomic-payment-customer")
+	createdOrder, err := newPostgresOrderService(
+		db, &sequenceIDGenerator{prefix: "atomic-payment-source"},
+	).CreateOrder(ctx, orderapp.CreateOrderCommand{
+		CustomerID: "atomic-payment-customer", ProductID: "product-1",
+		Quantity: 1, IdempotencyKey: "atomic-payment-key",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder() error = %v", err)
+	}
+
+	store := postgres.NewPaymentStore(db)
+	paymentConsumer := paymentapp.NewConsumer(
+		store, &sequenceIDGenerator{prefix: "atomic-payment"}, fixedClock{},
+	)
+	payload, _ := json.Marshal(event.OrderCreatedV1{
+		OrderID: createdOrder.Order.ID(), CustomerID: "atomic-payment-customer",
+		ProductID: "product-1", Quantity: 1, TotalCents: 12900,
+		OccurredAt: fixedClock{}.Now(),
+	})
+	message, _ := outbox.NewMessage(
+		"atomic-order-event", orderapp.OrderCreatedTopic, createdOrder.Order.ID(),
+		payload, fixedClock{}.Now(),
+	)
+	if _, err := paymentConsumer.Consume(ctx, message); err != nil {
+		t.Fatalf("Consume() error = %v", err)
+	}
+	now := time.Now().UTC()
+	tasks, err := store.ClaimTasks(ctx, "atomic-lease", 1, now, now.Add(time.Minute))
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ClaimTasks() = %+v, %v", tasks, err)
+	}
+	succeeded, err := tasks[0].Payment.Succeed("provider-atomic", now)
+	if err != nil {
+		t.Fatalf("Succeed() error = %v", err)
+	}
+	resultPayload, _ := json.Marshal(event.PaymentSucceededV1{
+		PaymentID: succeeded.ID(), OrderID: succeeded.OrderID(),
+		CustomerID: succeeded.CustomerID(), AmountCents: succeeded.AmountCents(),
+		OccurredAt: succeeded.UpdatedAt(),
+	})
+	resultMessage, _ := outbox.NewMessage(
+		"duplicate-result-id", event.PaymentSucceededV1Topic, succeeded.OrderID(),
+		resultPayload, succeeded.UpdatedAt(),
+	)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO outbox_messages (id, topic, message_key, payload, occurred_at, next_attempt_at)
+		VALUES ($1, 'fixture.topic', 'fixture-key', '{}', $2, $2)
+	`, resultMessage.ID, now); err != nil {
+		t.Fatalf("seed conflicting outbox message: %v", err)
+	}
+
+	err = store.CompleteTask(ctx, tasks[0].ID, tasks[0].LeaseID, paymentapp.TaskOutcome{
+		Payment: succeeded, ResultMessage: resultMessage,
+	}, now)
+	if err == nil {
+		t.Fatal("CompleteTask() error = nil, want outbox insert failure")
+	}
+	stored, err := store.GetPaymentByOrderID(ctx, createdOrder.Order.ID())
+	if err != nil || stored.Status() != payment.StatusProcessing {
+		t.Fatalf("payment after rollback = %+v, %v; want processing", stored, err)
+	}
+	var completedAt sql.NullTime
+	if err := db.QueryRowContext(ctx, `
+		SELECT completed_at FROM payment_tasks WHERE id = $1
+	`, tasks[0].ID).Scan(&completedAt); err != nil {
+		t.Fatalf("query payment task: %v", err)
+	}
+	if completedAt.Valid {
+		t.Fatalf("payment task completed_at = %s, want NULL after rollback", completedAt.Time)
 	}
 }
 

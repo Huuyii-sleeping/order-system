@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"example.com/order-system/internal/application/event"
+	"example.com/order-system/internal/application/inbox"
 	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/payment"
 )
 
 var (
 	ErrInvalidOrderCreatedEvent = errors.New("invalid order created event")
-	ErrInboxMessageConflict     = errors.New("inbox message ID was reused with different content")
+	ErrInboxMessageConflict     = inbox.ErrMessageConflict
 	ErrInvalidTask              = errors.New("invalid payment task")
 	ErrInvalidTaskClaim         = errors.New("invalid payment task claim")
 	ErrTaskLeaseLost            = errors.New("payment task lease was lost")

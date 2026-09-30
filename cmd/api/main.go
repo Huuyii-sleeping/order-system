@@ -53,16 +53,16 @@ func main() {
 	}
 	defer messageRuntime.Close()
 
-	outboxWorker := outboxapp.NewWorker(
-		services.Outbox,
-		messageRuntime.Publisher,
-		logger,
-		outboxapp.WorkerConfig{
-			PollInterval: cfg.OutboxPollInterval, BatchSize: cfg.OutboxBatchSize,
-			LeaseDuration: cfg.OutboxLeaseDuration, RetryBase: cfg.OutboxRetryBase,
-			RetryMax: cfg.OutboxRetryMax,
-		},
-	)
+	outboxWorkers := make([]*outboxapp.Worker, 0, len(services.Outboxes))
+	for _, store := range services.Outboxes {
+		outboxWorkers = append(outboxWorkers, outboxapp.NewWorker(
+			store, messageRuntime.Publisher, logger, outboxapp.WorkerConfig{
+				PollInterval: cfg.OutboxPollInterval, BatchSize: cfg.OutboxBatchSize,
+				LeaseDuration: cfg.OutboxLeaseDuration, RetryBase: cfg.OutboxRetryBase,
+				RetryMax: cfg.OutboxRetryMax,
+			},
+		))
+	}
 	paymentWorker := paymentapp.NewWorker(
 		services.PaymentTasks,
 		services.PaymentProvider,
@@ -74,11 +74,14 @@ func main() {
 		},
 	)
 	workerContext, cancelWorker := context.WithCancel(context.Background())
-	workerDone := make(chan struct{}, 3)
-	go func() {
-		defer func() { workerDone <- struct{}{} }()
-		outboxWorker.Run(workerContext)
-	}()
+	workerCount := len(outboxWorkers) + 2
+	workerDone := make(chan struct{}, workerCount)
+	for _, worker := range outboxWorkers {
+		go func() {
+			defer func() { workerDone <- struct{}{} }()
+			worker.Run(workerContext)
+		}()
+	}
 	go func() {
 		defer func() { workerDone <- struct{}{} }()
 		paymentWorker.Run(workerContext)
@@ -91,9 +94,9 @@ func main() {
 	}()
 	defer func() {
 		cancelWorker()
-		<-workerDone
-		<-workerDone
-		<-workerDone
+		for range workerCount {
+			<-workerDone
+		}
 	}()
 
 	router := httpapi.NewRouterWithConfig(

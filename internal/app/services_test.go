@@ -6,7 +6,11 @@ import (
 	"testing"
 	"time"
 
+	orderapp "example.com/order-system/internal/application/order"
+	"example.com/order-system/internal/application/outbox"
+	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
+	"example.com/order-system/internal/domain/order"
 )
 
 type dependencyPingerStub struct {
@@ -58,8 +62,55 @@ func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
 		t.Fatalf("NewServices() error = %v", err)
 	}
 	t.Cleanup(func() { _ = services.Close() })
-	if services.Payments == nil || services.PaymentQueries == nil ||
-		services.PaymentTasks == nil || services.PaymentProvider == nil {
-		t.Fatal("payment consumer, query service, task store, and provider must be wired")
+	if services.Payments == nil || services.PaymentResults == nil || services.PaymentQueries == nil ||
+		services.PaymentTasks == nil || services.PaymentProvider == nil || len(services.Outboxes) != 2 {
+		t.Fatal("payment flow, both memory outboxes, query service, task store, and provider must be wired")
+	}
+}
+
+func TestMemoryServicesCompletesPaymentSaga(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{
+		StorageDriver: config.StorageMemory, MessageDriver: config.MessageDirect,
+		AccessTokenTTL: time.Minute, RefreshTokenTTL: time.Hour, BcryptCost: 4,
+	}
+	services, err := NewServices(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewServices() error = %v", err)
+	}
+	t.Cleanup(func() { _ = services.Close() })
+	runtime, err := NewMessageRuntime(ctx, cfg, services, nil, nil)
+	if err != nil {
+		t.Fatalf("NewMessageRuntime() error = %v", err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	created, err := services.Orders.CreateOrder(ctx, orderapp.CreateOrderCommand{
+		CustomerID: "customer-1", ProductID: "product-1", Quantity: 2,
+		IdempotencyKey: "memory-saga-key",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder() error = %v", err)
+	}
+	outboxConfig := outbox.WorkerConfig{BatchSize: 10, LeaseDuration: time.Second}
+	orderOutbox := outbox.NewWorker(services.Outboxes[0], runtime.Publisher, nil, outboxConfig)
+	paymentOutbox := outbox.NewWorker(services.Outboxes[1], runtime.Publisher, nil, outboxConfig)
+	if processed, err := orderOutbox.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("order outbox RunOnce() = %d, %v", processed, err)
+	}
+	paymentWorker := paymentapp.NewWorker(
+		services.PaymentTasks, services.PaymentProvider, nil,
+		paymentapp.WorkerConfig{BatchSize: 10, LeaseDuration: time.Second},
+	)
+	if processed, err := paymentWorker.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("payment RunOnce() = %d, %v", processed, err)
+	}
+	if processed, err := paymentOutbox.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("payment outbox RunOnce() = %d, %v", processed, err)
+	}
+
+	completed, err := services.Orders.GetOrder(ctx, "customer-1", created.Order.ID())
+	if err != nil || completed.Status() != order.StatusConfirmed {
+		t.Fatalf("completed order = %+v, %v; want confirmed", completed, err)
 	}
 }

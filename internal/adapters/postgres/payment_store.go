@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"example.com/order-system/internal/application/event"
+	"example.com/order-system/internal/application/inbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/domain/payment"
 )
@@ -69,7 +71,7 @@ func (tx *paymentTransaction) TryBeginMessage(
 		return false, fmt.Errorf("read duplicate inbox message: %w", err)
 	}
 	if existingTopic != topic || existingPayloadHash != payloadHash {
-		return false, paymentapp.ErrInboxMessageConflict
+		return false, inbox.ErrMessageConflict
 	}
 	return false, nil
 }
@@ -229,6 +231,17 @@ func (s *PaymentStore) CompleteTask(
 	if outcome.Payment.Status() != payment.StatusSucceeded && outcome.Payment.Status() != payment.StatusFailed {
 		return paymentapp.ErrInvalidTask
 	}
+	if outcome.ResultMessage.ID == "" || outcome.ResultMessage.Key != outcome.Payment.OrderID() ||
+		!outcome.ResultMessage.OccurredAt.Equal(outcome.Payment.UpdatedAt()) {
+		return paymentapp.ErrInvalidTask
+	}
+	wantTopic := event.PaymentSucceededV1Topic
+	if outcome.Payment.Status() == payment.StatusFailed {
+		wantTopic = event.PaymentFailedV1Topic
+	}
+	if outcome.ResultMessage.Topic != wantTopic {
+		return paymentapp.ErrInvalidTask
+	}
 	return s.updateTask(ctx, taskID, leaseID, outcome, completedAt, true)
 }
 
@@ -302,6 +315,16 @@ func (s *PaymentStore) updateTask(
 	}
 	if err != nil {
 		return fmt.Errorf("update payment task result: %w", err)
+	}
+	if complete {
+		message := outcome.ResultMessage
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO outbox_messages (
+				id, topic, message_key, payload, occurred_at, next_attempt_at
+			) VALUES ($1, $2, $3, $4, $5, $5)
+		`, message.ID, message.Topic, message.Key, []byte(message.Payload), message.OccurredAt); err != nil {
+			return fmt.Errorf("insert payment result outbox message: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit payment task update: %w", err)

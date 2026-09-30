@@ -2,12 +2,15 @@ package memory_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"example.com/order-system/internal/adapters/memory"
+	"example.com/order-system/internal/application/event"
+	"example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/domain/payment"
 )
@@ -77,12 +80,26 @@ func TestPaymentStoreLeaseExpiresAndRejectsStaleWorker(t *testing.T) {
 		t.Fatalf("expired claim = %+v, %v", reclaimed, err)
 	}
 	succeeded, _ := reclaimed[0].Payment.Succeed("provider-1", now.Add(time.Minute))
-	outcome := paymentapp.TaskOutcome{Payment: succeeded}
+	payload, _ := json.Marshal(event.PaymentSucceededV1{
+		PaymentID: succeeded.ID(), OrderID: succeeded.OrderID(),
+		CustomerID: succeeded.CustomerID(), AmountCents: succeeded.AmountCents(),
+		OccurredAt: succeeded.UpdatedAt(),
+	})
+	resultMessage, _ := outbox.NewMessage(
+		"result-1", event.PaymentSucceededV1Topic, succeeded.OrderID(), payload, succeeded.UpdatedAt(),
+	)
+	outcome := paymentapp.TaskOutcome{Payment: succeeded, ResultMessage: resultMessage}
 	if err := store.CompleteTask(context.Background(), task.ID, "lease-1", outcome, now); !errors.Is(err, paymentapp.ErrTaskLeaseLost) {
 		t.Fatalf("stale completion error = %v", err)
 	}
 	if err := store.CompleteTask(context.Background(), task.ID, "lease-3", outcome, now); err != nil {
 		t.Fatalf("current completion error = %v", err)
+	}
+	claimed, err := store.Claim(
+		context.Background(), "outbox-lease", 1, now.Add(time.Minute), now.Add(2*time.Minute),
+	)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != resultMessage.ID {
+		t.Fatalf("payment result outbox claim = %+v, %v", claimed, err)
 	}
 }
 

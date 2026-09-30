@@ -63,8 +63,9 @@ make db-down
 ## 使用 Kafka/Redpanda 消息链路
 
 Kafka 模式需要持久化 Inbox，因此必须和 PostgreSQL 一起使用。启动完整基础设施、
-执行数据库迁移并创建三分区的 `orders.created.v1` Topic、对应的
-`orders.created.v1.dlq` 死信 Topic，以及隔离的集成测试 Topic：
+执行数据库迁移并创建三分区的 `orders.created.v1`、`payments.succeeded.v1`、
+`payments.failed.v1` Topic、共享的 `orders.created.v1.dlq` 死信 Topic，以及隔离的
+集成测试 Topic：
 
 ```bash
 make infra-up
@@ -136,6 +137,10 @@ curl http://127.0.0.1:8080/orders/<order-id>/payment \
 暂时返回 `404 payment not found`，客户端可以退避后重试。查询条件同时包含已认证的
 用户 ID，其他用户无法通过猜测订单 ID 读取支付信息。响应不暴露 Provider 返回的
 内部引用和失败详情，避免把内部诊断信息直接作为公共 API 契约。
+
+支付终态会通过第二条 Transactional Outbox 链路推进订单：支付成功时订单最终从
+`pending` 变为 `confirmed`；支付明确失败时订单最终变为 `cancelled`，并在同一个
+订单侧事务中释放预占库存。支付结果仍为 `unknown` 时不会取消订单。
 
 登出当前设备，或让当前用户的所有设备立即下线：
 
@@ -225,7 +230,9 @@ offset 提交都存在崩溃窗口，因此整个链路仍是至少一次投递�
 支付消费者在同一个事务中写入 Inbox、创建 `pending` 支付和支付任务。另一个
 Worker 在事务外调用模拟支付 Provider，并用稳定的支付 ID 作为第三方幂等键。
 明确成功或拒绝会结束任务；网络错误会把支付标记为 `unknown` 并指数退避重试。
-模拟 Provider 只用于本地学习，不代表真实扣款。
+终态、任务完成和支付结果 Outbox 在同一个事务中提交。订单侧通过 Inbox 幂等消费
+结果事件，确认订单或执行“取消订单 + 释放库存”的补偿。模拟 Provider 只用于本地
+学习，不代表真实扣款。
 
 相同参数和 `Idempotency-Key` 重试时会返回原订单，不会重复扣库存。
 同一个用户用同一个 Key 携带不同参数时返回 `409 Conflict`。不同用户的

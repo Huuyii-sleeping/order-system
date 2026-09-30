@@ -11,7 +11,8 @@ Kafka 分区按 offset 顺序消费。一条格式错误、契约不兼容或持
 - 每次从 Kafka 取得一条记录后，Handler 默认最多执行三次，次数可由
   `KAFKA_CONSUMER_MAX_ATTEMPTS` 调整；两次尝试之间使用 `KAFKA_CONSUMER_RETRY`。
 - 达到上限后，将原始记录同步发布到 `KAFKA_DEAD_LETTER_TOPIC`。默认 Topic 为
-  `orders.created.v1.dlq`。
+  `orders.created.v1.dlq`。当前订单创建和支付结果事件共用该死信 Topic；生产环境可按
+  运维边界拆分消费者和死信 Topic。
 - 死信保留原始 Key、Value 和非死信 Header，并追加原 Topic、Partition、Offset、
   Consumer Group、尝试次数、失败时间和截断后的错误原因。
 - 只有 Broker 确认死信写入后才提交原记录 offset；死信发布失败则回退本地读取位置，

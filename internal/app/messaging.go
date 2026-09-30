@@ -29,7 +29,9 @@ func NewMessageRuntime(
 	metrics messaging.KafkaConsumerMetrics,
 ) (*MessageRuntime, error) {
 	handlers := map[string]messaging.MessageHandler{
-		event.OrderCreatedV1Topic: services.Payments,
+		event.OrderCreatedV1Topic:     services.Payments,
+		event.PaymentSucceededV1Topic: services.PaymentResults,
+		event.PaymentFailedV1Topic:    services.PaymentResults,
 	}
 	switch cfg.MessageDriver {
 	case config.MessageDirect:
@@ -49,7 +51,11 @@ func NewMessageRuntime(
 		}
 		consumer, err := messaging.NewKafkaConsumer(messaging.KafkaConsumerConfig{
 			Brokers: brokers, GroupID: cfg.KafkaConsumerGroup,
-			Topics:          []string{event.OrderCreatedV1Topic},
+			Topics: []string{
+				event.OrderCreatedV1Topic,
+				event.PaymentSucceededV1Topic,
+				event.PaymentFailedV1Topic,
+			},
 			DeadLetterTopic: cfg.KafkaDeadLetterTopic,
 			MaxAttempts:     cfg.KafkaConsumerMaxAttempts,
 			RetryInterval:   cfg.KafkaConsumerRetry,

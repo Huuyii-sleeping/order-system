@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"example.com/order-system/internal/application/inbox"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/inventory"
@@ -32,6 +33,7 @@ type OrderStore struct {
 	stocksByProduct         map[string]inventory.Stock
 	ordersByID              map[string]order.Order
 	orderIDByIdempotencyKey map[idempotencyScope]string
+	inboxMessages           map[string]inboxMessage
 	outboxMessages          map[string]memoryOutboxMessage
 }
 
@@ -49,6 +51,7 @@ func NewOrderStore(stocks []inventory.Stock) (*OrderStore, error) {
 		stocksByProduct:         stocksByProduct,
 		ordersByID:              make(map[string]order.Order),
 		orderIDByIdempotencyKey: make(map[idempotencyScope]string),
+		inboxMessages:           make(map[string]inboxMessage),
 		outboxMessages:          make(map[string]memoryOutboxMessage),
 	}, nil
 }
@@ -71,6 +74,7 @@ func (s *OrderStore) Transact(ctx context.Context, fn func(orderapp.Transaction)
 		stocksByProduct:         cloneMap(s.stocksByProduct),
 		ordersByID:              cloneMap(s.ordersByID),
 		orderIDByIdempotencyKey: cloneMap(s.orderIDByIdempotencyKey),
+		inboxMessages:           cloneMap(s.inboxMessages),
 		outboxMessages:          cloneMap(s.outboxMessages),
 	}
 
@@ -84,6 +88,7 @@ func (s *OrderStore) Transact(ctx context.Context, fn func(orderapp.Transaction)
 	s.stocksByProduct = tx.stocksByProduct
 	s.ordersByID = tx.ordersByID
 	s.orderIDByIdempotencyKey = tx.orderIDByIdempotencyKey
+	s.inboxMessages = tx.inboxMessages
 	s.outboxMessages = tx.outboxMessages
 	return nil
 }
@@ -111,6 +116,7 @@ type memoryTransaction struct {
 	stocksByProduct         map[string]inventory.Stock
 	ordersByID              map[string]order.Order
 	orderIDByIdempotencyKey map[idempotencyScope]string
+	inboxMessages           map[string]inboxMessage
 	outboxMessages          map[string]memoryOutboxMessage
 }
 
@@ -171,12 +177,70 @@ func (tx *memoryTransaction) SaveOutboxMessage(message outbox.Message) error {
 	return nil
 }
 
-type memoryOutboxMessage struct {
-	outbox.Message
-	nextAttemptAt time.Time
-	lockedUntil   time.Time
-	publishedAt   time.Time
-	lastError     string
+func (s *OrderStore) TransactPaymentResult(
+	ctx context.Context, fn func(orderapp.PaymentResultTransaction) error,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx := &memoryTransaction{
+		stocksByProduct:         cloneMap(s.stocksByProduct),
+		ordersByID:              cloneMap(s.ordersByID),
+		orderIDByIdempotencyKey: cloneMap(s.orderIDByIdempotencyKey),
+		inboxMessages:           cloneMap(s.inboxMessages),
+		outboxMessages:          cloneMap(s.outboxMessages),
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.stocksByProduct = tx.stocksByProduct
+	s.ordersByID = tx.ordersByID
+	s.orderIDByIdempotencyKey = tx.orderIDByIdempotencyKey
+	s.inboxMessages = tx.inboxMessages
+	s.outboxMessages = tx.outboxMessages
+	return nil
+}
+
+func (tx *memoryTransaction) TryBeginMessage(
+	messageID, topic, payloadHash string, processedAt time.Time,
+) (bool, error) {
+	messageID = strings.TrimSpace(messageID)
+	topic = strings.TrimSpace(topic)
+	payloadHash = strings.TrimSpace(payloadHash)
+	if messageID == "" || topic == "" || len(payloadHash) != 64 || processedAt.IsZero() {
+		return false, fmt.Errorf("invalid inbox message")
+	}
+	if existing, exists := tx.inboxMessages[messageID]; exists {
+		if existing.topic != topic || existing.payloadHash != payloadHash {
+			return false, inbox.ErrMessageConflict
+		}
+		return false, nil
+	}
+	tx.inboxMessages[messageID] = inboxMessage{
+		topic: topic, payloadHash: payloadHash, processedAt: processedAt.UTC(),
+	}
+	return true, nil
+}
+
+func (tx *memoryTransaction) GetOrderForUpdate(orderID string) (order.Order, error) {
+	got, exists := tx.ordersByID[strings.TrimSpace(orderID)]
+	if !exists {
+		return order.Order{}, order.ErrOrderNotFound
+	}
+	return got, nil
+}
+
+func (tx *memoryTransaction) UpdateOrder(updated order.Order) error {
+	if _, exists := tx.ordersByID[updated.ID()]; !exists {
+		return order.ErrOrderNotFound
+	}
+	tx.ordersByID[updated.ID()] = updated
+	return nil
 }
 
 func (s *OrderStore) Claim(

@@ -9,17 +9,18 @@ import (
 )
 
 var (
-	ErrInvalidOrderID        = errors.New("order ID is required")
-	ErrInvalidCustomerID     = errors.New("customer ID is required")
-	ErrInvalidProductID      = errors.New("order product ID is required")
-	ErrInvalidQuantity       = errors.New("order quantity must be greater than zero")
-	ErrInvalidUnitPrice      = errors.New("unit price must be greater than zero")
-	ErrInvalidIdempotencyKey = errors.New("idempotency key is required")
-	ErrInvalidCreatedAt      = errors.New("order creation time is required")
-	ErrInvalidStatus         = errors.New("invalid order status")
-	ErrInvalidTotal          = errors.New("order total does not match unit price and quantity")
-	ErrOrderTotalOverflow    = errors.New("order total exceeds supported range")
-	ErrOrderNotFound         = errors.New("order not found")
+	ErrInvalidOrderID         = errors.New("order ID is required")
+	ErrInvalidCustomerID      = errors.New("customer ID is required")
+	ErrInvalidProductID       = errors.New("order product ID is required")
+	ErrInvalidQuantity        = errors.New("order quantity must be greater than zero")
+	ErrInvalidUnitPrice       = errors.New("unit price must be greater than zero")
+	ErrInvalidIdempotencyKey  = errors.New("idempotency key is required")
+	ErrInvalidCreatedAt       = errors.New("order creation time is required")
+	ErrInvalidStatus          = errors.New("invalid order status")
+	ErrInvalidTotal           = errors.New("order total does not match unit price and quantity")
+	ErrOrderTotalOverflow     = errors.New("order total exceeds supported range")
+	ErrOrderNotFound          = errors.New("order not found")
+	ErrInvalidStateTransition = errors.New("invalid order state transition")
 )
 
 // Status 表示订单当前所在的生命周期状态。
@@ -187,6 +188,24 @@ func (s Status) valid() bool {
 	default:
 		return false
 	}
+}
+
+// Confirm 只允许待支付订单在收到明确的支付成功结果后进入 confirmed。
+func (o Order) Confirm() (Order, error) {
+	if o.status != StatusPending {
+		return Order{}, ErrInvalidStateTransition
+	}
+	o.status = StatusConfirmed
+	return o, nil
+}
+
+// Cancel 只允许待支付订单在收到明确的支付失败结果后取消。
+func (o Order) Cancel() (Order, error) {
+	if o.status != StatusPending {
+		return Order{}, ErrInvalidStateTransition
+	}
+	o.status = StatusCancelled
+	return o, nil
 }
 
 func (o Order) ID() string             { return o.id }

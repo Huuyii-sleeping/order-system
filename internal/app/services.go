@@ -27,8 +27,9 @@ type Services struct {
 	Catalog         *catalogapp.Service
 	Auth            *authapp.Service
 	Orders          *orderapp.Service
-	Outbox          outboxapp.Store
+	Outboxes        []outboxapp.Store
 	Payments        *paymentapp.Consumer
+	PaymentResults  *orderapp.PaymentResultConsumer
 	PaymentQueries  *paymentapp.QueryService
 	PaymentTasks    paymentapp.TaskStore
 	PaymentProvider paymentapp.Provider
@@ -44,8 +45,11 @@ type dependencyPinger interface {
 func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	var products catalogapp.Repository
 	var identities authapp.Store
-	var orders orderapp.Store
-	var outboxStore outboxapp.Store
+	var orders interface {
+		orderapp.Store
+		orderapp.PaymentResultStore
+	}
+	var outboxStores []outboxapp.Store
 	var paymentStore interface {
 		paymentapp.Store
 		paymentapp.TaskStore
@@ -72,8 +76,9 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			return nil, fmt.Errorf("create memory order store: %w", err)
 		}
 		orders = memoryOrders
-		outboxStore = memoryOrders
-		paymentStore = memory.NewPaymentStore()
+		memoryPayments := memory.NewPaymentStore()
+		paymentStore = memoryPayments
+		outboxStores = []outboxapp.Store{memoryOrders, memoryPayments}
 
 	case config.StoragePostgres:
 		db, err := postgres.Open(ctx, cfg.DatabaseURL)
@@ -85,7 +90,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		products = postgres.NewCatalogRepository(db)
 		identities = postgres.NewIdentityStore(db)
 		orders = postgres.NewOrderStore(db)
-		outboxStore = postgres.NewOutboxStore(db)
+		outboxStores = []outboxapp.Store{postgres.NewOutboxStore(db)}
 		paymentStore = postgres.NewPaymentStore(db)
 
 	default:
@@ -95,6 +100,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	paymentConsumer := paymentapp.NewConsumer(
 		paymentStore, idgenerator.Random{}, clock.System{},
 	)
+	paymentResultConsumer := orderapp.NewPaymentResultConsumer(orders, clock.System{})
 	return &Services{
 		Catalog: catalogapp.NewService(products),
 		Auth: authapp.NewService(
@@ -112,8 +118,9 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 			idgenerator.Random{},
 			clock.System{},
 		),
-		Outbox:          outboxStore,
+		Outboxes:        outboxStores,
 		Payments:        paymentConsumer,
+		PaymentResults:  paymentResultConsumer,
 		PaymentQueries:  paymentapp.NewQueryService(paymentStore),
 		PaymentTasks:    paymentStore,
 		PaymentProvider: paymentprovider.NewSimulated(),

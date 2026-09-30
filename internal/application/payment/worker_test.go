@@ -2,10 +2,13 @@ package paymentapp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"example.com/order-system/internal/application/event"
 	"example.com/order-system/internal/domain/payment"
 )
 
@@ -62,7 +65,7 @@ func TestWorkerCompletesSuccessfulCharge(t *testing.T) {
 	store := &taskStoreStub{tasks: []Task{testTask(t)}}
 	provider := &providerStub{result: ChargeResult{Status: ChargeSucceeded, ProviderReference: "provider-1"}}
 	worker := NewWorker(store, provider, nil, WorkerConfig{})
-	worker.newID = func() (string, error) { return "lease-1", nil }
+	worker.newID = sequenceWorkerIDs("lease-1", "event-1")
 	worker.now = testWorkerClock()
 
 	processed, err := worker.RunOnce(context.Background())
@@ -75,6 +78,18 @@ func TestWorkerCompletesSuccessfulCharge(t *testing.T) {
 	}
 	if len(provider.requests) != 1 || provider.requests[0].IdempotencyKey != "payment-1" {
 		t.Fatalf("provider requests = %+v", provider.requests)
+	}
+	if store.completed.ResultMessage.Topic != event.PaymentSucceededV1Topic ||
+		store.completed.ResultMessage.Key != "order-1" {
+		t.Fatalf("result message = %+v", store.completed.ResultMessage)
+	}
+	var succeeded event.PaymentSucceededV1
+	if err := json.Unmarshal(store.completed.ResultMessage.Payload, &succeeded); err != nil {
+		t.Fatalf("decode succeeded event: %v", err)
+	}
+	if succeeded.PaymentID != "payment-1" || succeeded.OrderID != "order-1" ||
+		succeeded.CustomerID != "customer-1" || succeeded.AmountCents != 12900 {
+		t.Fatalf("succeeded event = %+v", succeeded)
 	}
 }
 
@@ -95,13 +110,16 @@ func TestWorkerRecordsUnknownAndRetriesProviderError(t *testing.T) {
 		!store.nextAttempt.Equal(now.Add(2*time.Second)) {
 		t.Fatalf("retry outcome = %+v, next = %s", store.retried, store.nextAttempt)
 	}
+	if store.retried.ResultMessage.ID != "" {
+		t.Fatalf("unknown result must not publish an event: %+v", store.retried.ResultMessage)
+	}
 }
 
 func TestWorkerCompletesDeclinedCharge(t *testing.T) {
 	store := &taskStoreStub{tasks: []Task{testTask(t)}}
 	provider := &providerStub{result: ChargeResult{Status: ChargeDeclined, Reason: "card declined"}}
 	worker := NewWorker(store, provider, nil, WorkerConfig{})
-	worker.newID = func() (string, error) { return "lease-1", nil }
+	worker.newID = sequenceWorkerIDs("lease-1", "event-1")
 	worker.now = testWorkerClock()
 
 	if _, err := worker.RunOnce(context.Background()); err != nil {
@@ -109,6 +127,26 @@ func TestWorkerCompletesDeclinedCharge(t *testing.T) {
 	}
 	if store.completed.Payment.Status() != payment.StatusFailed || store.completed.Reason != "card declined" {
 		t.Fatalf("completed outcome = %+v", store.completed)
+	}
+	if store.completed.ResultMessage.Topic != event.PaymentFailedV1Topic {
+		t.Fatalf("result message topic = %q, want %q",
+			store.completed.ResultMessage.Topic, event.PaymentFailedV1Topic)
+	}
+	if string(store.completed.ResultMessage.Payload) == "" ||
+		json.Valid(store.completed.ResultMessage.Payload) == false {
+		t.Fatalf("failed event payload = %q", store.completed.ResultMessage.Payload)
+	}
+	if strings.Contains(string(store.completed.ResultMessage.Payload), "card declined") {
+		t.Fatalf("failed event leaks provider reason: %s", store.completed.ResultMessage.Payload)
+	}
+}
+
+func sequenceWorkerIDs(values ...string) func() (string, error) {
+	index := 0
+	return func() (string, error) {
+		value := values[index]
+		index++
+		return value, nil
 	}
 }
 

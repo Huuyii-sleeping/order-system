@@ -114,3 +114,62 @@ func TestRestoreOrderRejectsInvalidStatus(t *testing.T) {
 		t.Fatalf("Restore() error = %v, want invalid status", err)
 	}
 }
+
+func TestOrderMovesFromPendingToTerminalState(t *testing.T) {
+	pending, err := order.New(
+		"order-1", "customer-1", "product-1", 2, 12900, "key-1", time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	t.Run("confirm after payment succeeds", func(t *testing.T) {
+		confirmed, err := pending.Confirm()
+		if err != nil {
+			t.Fatalf("Confirm() error = %v", err)
+		}
+		if confirmed.Status() != order.StatusConfirmed {
+			t.Fatalf("confirmed status = %q, want %q", confirmed.Status(), order.StatusConfirmed)
+		}
+		if pending.Status() != order.StatusPending {
+			t.Fatalf("original status = %q, want pending", pending.Status())
+		}
+	})
+
+	t.Run("cancel after payment fails", func(t *testing.T) {
+		cancelled, err := pending.Cancel()
+		if err != nil {
+			t.Fatalf("Cancel() error = %v", err)
+		}
+		if cancelled.Status() != order.StatusCancelled {
+			t.Fatalf("cancelled status = %q, want %q", cancelled.Status(), order.StatusCancelled)
+		}
+	})
+}
+
+func TestOrderRejectsTransitionFromTerminalState(t *testing.T) {
+	pending, err := order.New(
+		"order-1", "customer-1", "product-1", 1, 12900, "key-1", time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	confirmed, _ := pending.Confirm()
+	cancelled, _ := pending.Cancel()
+
+	for _, test := range []struct {
+		name       string
+		transition func() (order.Order, error)
+	}{
+		{name: "confirm confirmed", transition: confirmed.Confirm},
+		{name: "cancel confirmed", transition: confirmed.Cancel},
+		{name: "confirm cancelled", transition: cancelled.Confirm},
+		{name: "cancel cancelled", transition: cancelled.Cancel},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := test.transition(); !errors.Is(err, order.ErrInvalidStateTransition) {
+				t.Fatalf("transition error = %v, want %v", err, order.ErrInvalidStateTransition)
+			}
+		})
+	}
+}

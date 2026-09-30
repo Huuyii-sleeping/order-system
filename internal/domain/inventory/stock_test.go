@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"example.com/order-system/internal/domain/inventory"
@@ -45,6 +46,47 @@ func TestStockRejectsInvalidReservation(t *testing.T) {
 			_, err := stock.Reserve(tt.quantity)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Reserve() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestStockRelease(t *testing.T) {
+	stock, err := inventory.NewStock("product-1", 3)
+	if err != nil {
+		t.Fatalf("NewStock() error = %v", err)
+	}
+
+	released, err := stock.Release(2)
+	if err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if released.Available() != 5 {
+		t.Fatalf("released stock = %d, want 5", released.Available())
+	}
+	if stock.Available() != 3 {
+		t.Fatalf("original stock = %d, want 3", stock.Available())
+	}
+}
+
+func TestStockRejectsInvalidRelease(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		available int
+		quantity  int
+		wantErr   error
+	}{
+		{name: "zero quantity", available: 1, quantity: 0, wantErr: inventory.ErrInvalidQuantity},
+		{name: "negative quantity", available: 1, quantity: -1, wantErr: inventory.ErrInvalidQuantity},
+		{name: "integer overflow", available: math.MaxInt, quantity: 1, wantErr: inventory.ErrStockOverflow},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stock, err := inventory.NewStock("product-1", test.available)
+			if err != nil {
+				t.Fatalf("NewStock() error = %v", err)
+			}
+			if _, err := stock.Release(test.quantity); !errors.Is(err, test.wantErr) {
+				t.Fatalf("Release() error = %v, want %v", err, test.wantErr)
 			}
 		})
 	}

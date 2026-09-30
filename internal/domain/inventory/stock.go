@@ -3,6 +3,7 @@ package inventory
 
 import (
 	"errors"
+	"math"
 	"strings"
 )
 
@@ -11,6 +12,7 @@ var (
 	ErrInvalidStock      = errors.New("available stock cannot be negative")
 	ErrInvalidQuantity   = errors.New("quantity must be greater than zero")
 	ErrInsufficientStock = errors.New("insufficient stock")
+	ErrStockOverflow     = errors.New("available stock exceeds supported range")
 	ErrStockNotFound     = errors.New("stock not found")
 )
 
@@ -50,6 +52,20 @@ func (s Stock) Reserve(quantity int) (Stock, error) {
 	}
 
 	s.available -= quantity
+	return s, nil
+}
+
+// Release 释放之前为订单预占的库存。它只负责一次合法的库存加回；
+// “同一订单是否已经补偿过”由订单状态机和消息 Inbox 共同保证。
+func (s Stock) Release(quantity int) (Stock, error) {
+	if quantity <= 0 {
+		return Stock{}, ErrInvalidQuantity
+	}
+	if quantity > math.MaxInt-s.available {
+		return Stock{}, ErrStockOverflow
+	}
+
+	s.available += quantity
 	return s, nil
 }
 

@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"example.com/order-system/internal/application/event"
+	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/payment"
 )
 
@@ -46,8 +49,9 @@ type ChargeResult struct {
 }
 
 type TaskOutcome struct {
-	Payment payment.Payment
-	Reason  string
+	Payment       payment.Payment
+	Reason        string
+	ResultMessage outbox.Message
 }
 
 type WorkerConfig struct {
@@ -192,11 +196,57 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 			}
 			continue
 		}
+		resultMessage, err := w.newPaymentResultMessage(outcome.Payment)
+		if err != nil {
+			batchError = errors.Join(batchError, fmt.Errorf(
+				"create payment result event for task %q: %w", task.ID, err,
+			))
+			continue
+		}
+		outcome.ResultMessage = resultMessage
 		if err := w.store.CompleteTask(ctx, task.ID, task.LeaseID, outcome, at); err != nil {
 			batchError = errors.Join(batchError, fmt.Errorf("complete payment task %q: %w", task.ID, err))
 		}
 	}
 	return len(tasks), batchError
+}
+
+func (w *Worker) newPaymentResultMessage(completed payment.Payment) (outbox.Message, error) {
+	messageID, err := w.newID()
+	if err != nil {
+		return outbox.Message{}, fmt.Errorf("generate payment result event ID: %w", err)
+	}
+
+	var topic string
+	var payload []byte
+	switch completed.Status() {
+	case payment.StatusSucceeded:
+		topic = event.PaymentSucceededV1Topic
+		payload, err = json.Marshal(event.PaymentSucceededV1{
+			PaymentID: completed.ID(), OrderID: completed.OrderID(),
+			CustomerID: completed.CustomerID(), AmountCents: completed.AmountCents(),
+			OccurredAt: completed.UpdatedAt(),
+		})
+	case payment.StatusFailed:
+		topic = event.PaymentFailedV1Topic
+		payload, err = json.Marshal(event.PaymentFailedV1{
+			PaymentID: completed.ID(), OrderID: completed.OrderID(),
+			CustomerID: completed.CustomerID(), AmountCents: completed.AmountCents(),
+			OccurredAt: completed.UpdatedAt(),
+		})
+	default:
+		return outbox.Message{}, ErrInvalidTask
+	}
+	if err != nil {
+		return outbox.Message{}, fmt.Errorf("encode payment result event: %w", err)
+	}
+	message, err := outbox.NewMessage(
+		messageID, topic, completed.OrderID(), payload, completed.UpdatedAt(),
+	)
+	if err != nil {
+		return outbox.Message{}, fmt.Errorf("create payment result event: %w", err)
+	}
+	return message, nil
 }
 
 func (w *Worker) retryDelay(attempt int) time.Duration {

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"example.com/order-system/internal/application/event"
+	"example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/domain/payment"
 )
@@ -18,7 +20,8 @@ var (
 	ErrDuplicatePaymentOrderID = errors.New("duplicate payment order ID")
 )
 
-// PaymentStore 用 copy-on-write 模拟 Inbox、Payment、PaymentTask 的数据库事务。
+// PaymentStore 用 copy-on-write 模拟 Inbox、Payment、PaymentTask 和支付结果
+// Outbox 的数据库事务。
 type PaymentStore struct {
 	mu sync.RWMutex
 
@@ -26,12 +29,7 @@ type PaymentStore struct {
 	paymentsByID     map[string]payment.Payment
 	paymentIDByOrder map[string]string
 	tasks            map[string]memoryPaymentTask
-}
-
-type inboxMessage struct {
-	topic       string
-	payloadHash string
-	processedAt time.Time
+	outboxMessages   map[string]memoryOutboxMessage
 }
 
 type memoryPaymentTask struct {
@@ -48,6 +46,7 @@ func NewPaymentStore() *PaymentStore {
 		paymentsByID:     make(map[string]payment.Payment),
 		paymentIDByOrder: make(map[string]string),
 		tasks:            make(map[string]memoryPaymentTask),
+		outboxMessages:   make(map[string]memoryOutboxMessage),
 	}
 }
 
@@ -234,6 +233,18 @@ func (s *PaymentStore) CompleteTask(
 	if outcome.Payment.Status() != payment.StatusSucceeded && outcome.Payment.Status() != payment.StatusFailed {
 		return paymentapp.ErrInvalidTask
 	}
+	wantTopic := event.PaymentSucceededV1Topic
+	if outcome.Payment.Status() == payment.StatusFailed {
+		wantTopic = event.PaymentFailedV1Topic
+	}
+	if outcome.ResultMessage.ID == "" || outcome.ResultMessage.Topic != wantTopic ||
+		outcome.ResultMessage.Key != outcome.Payment.OrderID() ||
+		!outcome.ResultMessage.OccurredAt.Equal(outcome.Payment.UpdatedAt()) {
+		return paymentapp.ErrInvalidTask
+	}
+	if _, exists := s.outboxMessages[outcome.ResultMessage.ID]; exists {
+		return fmt.Errorf("duplicate outbox message ID %q", outcome.ResultMessage.ID)
+	}
 	s.paymentsByID[outcome.Payment.ID()] = outcome.Payment
 	record.Payment = outcome.Payment
 	record.completedAt = completedAt.UTC()
@@ -241,6 +252,11 @@ func (s *PaymentStore) CompleteTask(
 	record.lockedUntil = time.Time{}
 	record.lastError = outcome.Reason
 	s.tasks[taskID] = record
+	message := outcome.ResultMessage
+	message.Payload = append([]byte(nil), message.Payload...)
+	s.outboxMessages[message.ID] = memoryOutboxMessage{
+		Message: message, nextAttemptAt: message.OccurredAt,
+	}
 	return nil
 }
 
@@ -267,5 +283,91 @@ func (s *PaymentStore) RetryTask(
 	record.lockedUntil = time.Time{}
 	record.lastError = outcome.Reason
 	s.tasks[taskID] = record
+	return nil
+}
+
+func (s *PaymentStore) Claim(
+	ctx context.Context, leaseID string, batchSize int, now, lockedUntil time.Time,
+) ([]outbox.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(leaseID) == "" || batchSize <= 0 || !lockedUntil.After(now) {
+		return nil, outbox.ErrInvalidClaim
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	eligible := make([]string, 0, len(s.outboxMessages))
+	for id, record := range s.outboxMessages {
+		if !record.publishedAt.IsZero() || record.nextAttemptAt.After(now) ||
+			(!record.lockedUntil.IsZero() && record.lockedUntil.After(now)) {
+			continue
+		}
+		eligible = append(eligible, id)
+	}
+	sort.Slice(eligible, func(i, j int) bool {
+		left := s.outboxMessages[eligible[i]].OccurredAt
+		right := s.outboxMessages[eligible[j]].OccurredAt
+		if left.Equal(right) {
+			return eligible[i] < eligible[j]
+		}
+		return left.Before(right)
+	})
+	if len(eligible) > batchSize {
+		eligible = eligible[:batchSize]
+	}
+
+	messages := make([]outbox.Message, 0, len(eligible))
+	for _, id := range eligible {
+		record := s.outboxMessages[id]
+		record.Attempts++
+		record.LeaseID = leaseID
+		record.lockedUntil = lockedUntil
+		s.outboxMessages[id] = record
+		message := record.Message
+		message.Payload = append([]byte(nil), message.Payload...)
+		messages = append(messages, message)
+	}
+	return messages, nil
+}
+
+func (s *PaymentStore) MarkPublished(
+	ctx context.Context, messageID, leaseID string, publishedAt time.Time,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, exists := s.outboxMessages[messageID]
+	if !exists || record.LeaseID != leaseID || !record.publishedAt.IsZero() {
+		return outbox.ErrLeaseLost
+	}
+	record.publishedAt = publishedAt.UTC()
+	record.LeaseID = ""
+	record.lockedUntil = time.Time{}
+	record.lastError = ""
+	s.outboxMessages[messageID] = record
+	return nil
+}
+
+func (s *PaymentStore) MarkFailed(
+	ctx context.Context, messageID, leaseID string, nextAttemptAt time.Time, reason string,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, exists := s.outboxMessages[messageID]
+	if !exists || record.LeaseID != leaseID || !record.publishedAt.IsZero() {
+		return outbox.ErrLeaseLost
+	}
+	record.nextAttemptAt = nextAttemptAt.UTC()
+	record.lastError = reason
+	record.LeaseID = ""
+	record.lockedUntil = time.Time{}
+	s.outboxMessages[messageID] = record
 	return nil
 }

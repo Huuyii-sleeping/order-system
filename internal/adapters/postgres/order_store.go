@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"example.com/order-system/internal/application/inbox"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/inventory"
@@ -48,6 +51,23 @@ func (s *OrderStore) Transact(ctx context.Context, fn func(orderapp.Transaction)
 	return nil
 }
 
+func (s *OrderStore) TransactPaymentResult(
+	ctx context.Context, fn func(orderapp.PaymentResultTransaction) error,
+) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin payment result transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(&orderTransaction{ctx: ctx, tx: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit payment result transaction: %w", err)
+	}
+	return nil
+}
+
 func (s *OrderStore) GetOrderByIDAndCustomerID(
 	ctx context.Context,
 	orderID, customerID string,
@@ -71,6 +91,66 @@ func (s *OrderStore) GetOrderByIDAndCustomerID(
 type orderTransaction struct {
 	ctx context.Context
 	tx  *sql.Tx
+}
+
+func (tx *orderTransaction) TryBeginMessage(
+	messageID, topic, payloadHash string, processedAt time.Time,
+) (bool, error) {
+	result, err := tx.tx.ExecContext(tx.ctx, `
+		INSERT INTO inbox_messages (message_id, topic, payload_hash, processed_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (message_id) DO NOTHING
+	`, messageID, topic, payloadHash, processedAt)
+	if err != nil {
+		return false, fmt.Errorf("insert inbox message: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read inserted inbox rows: %w", err)
+	}
+	if rows == 1 {
+		return true, nil
+	}
+	var existingTopic, existingPayloadHash string
+	if err := tx.tx.QueryRowContext(tx.ctx, `
+		SELECT topic, payload_hash FROM inbox_messages WHERE message_id = $1
+	`, messageID).Scan(&existingTopic, &existingPayloadHash); err != nil {
+		return false, fmt.Errorf("read duplicate inbox message: %w", err)
+	}
+	if existingTopic != topic || existingPayloadHash != payloadHash {
+		return false, inbox.ErrMessageConflict
+	}
+	return false, nil
+}
+
+func (tx *orderTransaction) GetOrderForUpdate(orderID string) (order.Order, error) {
+	got, err := scanOrder(tx.tx.QueryRowContext(
+		tx.ctx, orderSelect+` WHERE id = $1 FOR UPDATE`, strings.TrimSpace(orderID),
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return order.Order{}, order.ErrOrderNotFound
+	}
+	if err != nil {
+		return order.Order{}, fmt.Errorf("get order for update: %w", err)
+	}
+	return got, nil
+}
+
+func (tx *orderTransaction) UpdateOrder(updated order.Order) error {
+	result, err := tx.tx.ExecContext(tx.ctx, `
+		UPDATE orders SET status = $1 WHERE id = $2
+	`, updated.Status(), updated.ID())
+	if err != nil {
+		return fmt.Errorf("update order: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated order rows: %w", err)
+	}
+	if rows != 1 {
+		return order.ErrOrderNotFound
+	}
+	return nil
 }
 
 func (tx *orderTransaction) GetOrderByIdempotencyKey(customerID, key string) (order.Order, error) {
