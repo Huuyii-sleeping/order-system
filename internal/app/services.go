@@ -29,6 +29,7 @@ type Services struct {
 	Orders          *orderapp.Service
 	Outbox          outboxapp.Store
 	Payments        *paymentapp.Consumer
+	PaymentQueries  *paymentapp.QueryService
 	PaymentTasks    paymentapp.TaskStore
 	PaymentProvider paymentapp.Provider
 
@@ -48,6 +49,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 	var paymentStore interface {
 		paymentapp.Store
 		paymentapp.TaskStore
+		paymentapp.QueryStore
 	}
 	var readiness []dependencyPinger
 	var closer io.Closer
@@ -112,6 +114,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		),
 		Outbox:          outboxStore,
 		Payments:        paymentConsumer,
+		PaymentQueries:  paymentapp.NewQueryService(paymentStore),
 		PaymentTasks:    paymentStore,
 		PaymentProvider: paymentprovider.NewSimulated(),
 		readiness:       readiness,

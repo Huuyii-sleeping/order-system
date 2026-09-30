@@ -123,6 +123,20 @@ curl http://127.0.0.1:8080/orders/<order-id> \
   -H 'Authorization: Bearer <access-token>'
 ```
 
+订单创建后，支付会由消息消费者和后台 Worker 异步处理。使用同一个 Bearer Token
+查询当前用户订单对应的支付结果：
+
+```bash
+curl http://127.0.0.1:8080/orders/<order-id>/payment \
+  -H 'Authorization: Bearer <access-token>'
+```
+
+支付可能经历 `pending -> processing -> succeeded`；第三方结果不确定时会进入
+`unknown` 并重试，明确拒绝则进入 `failed`。订单刚创建、事件尚未被消费时，接口会
+暂时返回 `404 payment not found`，客户端可以退避后重试。查询条件同时包含已认证的
+用户 ID，其他用户无法通过猜测订单 ID 读取支付信息。响应不暴露 Provider 返回的
+内部引用和失败详情，避免把内部诊断信息直接作为公共 API 契约。
+
 登出当前设备，或让当前用户的所有设备立即下线：
 
 ```bash

@@ -16,6 +16,7 @@ import (
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/identity"
 	"example.com/order-system/internal/domain/order"
+	"example.com/order-system/internal/domain/payment"
 )
 
 // CatalogQueries 是 HTTP 商品接口需要的应用能力。
@@ -31,6 +32,10 @@ type CatalogQueries interface {
 type OrderUseCases interface {
 	CreateOrder(context.Context, orderapp.CreateOrderCommand) (orderapp.CreateOrderResult, error)
 	GetOrder(context.Context, string, string) (order.Order, error)
+}
+
+type PaymentQueries interface {
+	GetPayment(context.Context, string, string) (payment.Payment, error)
 }
 
 type AuthUseCases interface {
@@ -61,6 +66,7 @@ type RouterConfig struct {
 	Readiness        ReadinessChecker
 	ReadinessTimeout time.Duration
 	MetricsHandler   http.Handler
+	PaymentQueries   PaymentQueries
 	Logger           *slog.Logger
 }
 
@@ -128,6 +134,13 @@ func NewRouterWithConfig(
 	orderHandler := newOrderHandler(orderUseCases)
 	mux.Handle("POST /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.create)))
 	mux.Handle("GET /orders/{orderID}", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.getByID)))
+	if config.PaymentQueries != nil {
+		paymentHandler := newPaymentHandler(config.PaymentQueries)
+		mux.Handle(
+			"GET /orders/{orderID}/payment",
+			WithAuthentication(authUseCases, http.HandlerFunc(paymentHandler.getByOrderID)),
+		)
+	}
 
 	// 返回原始路由器。
 	//

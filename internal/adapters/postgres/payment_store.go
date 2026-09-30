@@ -113,6 +113,22 @@ func (s *PaymentStore) GetPaymentByOrderID(
 	return got, nil
 }
 
+func (s *PaymentStore) GetPaymentByOrderIDAndCustomerID(
+	ctx context.Context, orderID, customerID string,
+) (payment.Payment, error) {
+	got, err := scanPayment(s.db.QueryRowContext(
+		ctx, paymentSelect+` WHERE order_id = $1 AND customer_id = $2`,
+		strings.TrimSpace(orderID), strings.TrimSpace(customerID),
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return payment.Payment{}, payment.ErrPaymentNotFound
+	}
+	if err != nil {
+		return payment.Payment{}, fmt.Errorf("get payment by order and customer ID: %w", err)
+	}
+	return got, nil
+}
+
 func (s *PaymentStore) ClaimTasks(
 	ctx context.Context, leaseID string, batchSize int, now, lockedUntil time.Time,
 ) ([]paymentapp.Task, error) {

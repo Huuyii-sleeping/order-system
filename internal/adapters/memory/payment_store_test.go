@@ -85,3 +85,29 @@ func TestPaymentStoreLeaseExpiresAndRejectsStaleWorker(t *testing.T) {
 		t.Fatalf("current completion error = %v", err)
 	}
 }
+
+func TestPaymentStoreScopesPaymentQueryToCustomer(t *testing.T) {
+	store := memory.NewPaymentStore()
+	now := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	created, err := payment.New("payment-query", "order-query", "customer-1", 12900, now)
+	if err != nil {
+		t.Fatalf("payment.New() error = %v", err)
+	}
+	if err := store.Transact(context.Background(), func(tx paymentapp.Transaction) error {
+		return tx.SavePayment(created)
+	}); err != nil {
+		t.Fatalf("seed payment: %v", err)
+	}
+
+	got, err := store.GetPaymentByOrderIDAndCustomerID(
+		context.Background(), "order-query", "customer-1",
+	)
+	if err != nil || got.ID() != created.ID() {
+		t.Fatalf("owner query = %+v, %v", got, err)
+	}
+	if _, err := store.GetPaymentByOrderIDAndCustomerID(
+		context.Background(), "order-query", "customer-2",
+	); !errors.Is(err, payment.ErrPaymentNotFound) {
+		t.Fatalf("cross-customer query error = %v, want payment not found", err)
+	}
+}

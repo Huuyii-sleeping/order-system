@@ -58,7 +58,8 @@ func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
 		t.Fatalf("NewServices() error = %v", err)
 	}
 	t.Cleanup(func() { _ = services.Close() })
-	if services.Payments == nil || services.PaymentTasks == nil || services.PaymentProvider == nil {
-		t.Fatal("payment consumer, task store, and provider must be wired")
+	if services.Payments == nil || services.PaymentQueries == nil ||
+		services.PaymentTasks == nil || services.PaymentProvider == nil {
+		t.Fatal("payment consumer, query service, task store, and provider must be wired")
 	}
 }

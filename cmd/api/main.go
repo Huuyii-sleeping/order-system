@@ -104,6 +104,7 @@ func main() {
 			Readiness:        services,
 			ReadinessTimeout: cfg.ReadinessTimeout,
 			MetricsHandler:   metricRegistry.Handler(),
+			PaymentQueries:   services.PaymentQueries,
 			Logger:           logger,
 			AuthSecurity: httpapi.AuthSecurityConfig{
 				SecureCookies: cfg.SecureCookies,

@@ -259,3 +259,53 @@ func TestIntegrationConcurrentPaymentTaskClaim(t *testing.T) {
 		t.Fatalf("concurrently claimed payment tasks = %d, want 1", claimed)
 	}
 }
+
+func TestIntegrationPaymentQueryIsScopedToCustomer(t *testing.T) {
+	databaseURL := integrationDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db := openMigratedIdentityTestDB(t, ctx, databaseURL)
+	seedIntegrationUsers(t, db, "query-customer", "other-customer")
+	orderService := newPostgresOrderService(db, &sequenceIDGenerator{prefix: "query-payment"})
+	createdOrder, err := orderService.CreateOrder(ctx, orderapp.CreateOrderCommand{
+		CustomerID: "query-customer", ProductID: "product-1",
+		Quantity: 1, IdempotencyKey: "query-payment-key",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder() error = %v", err)
+	}
+
+	store := postgres.NewPaymentStore(db)
+	consumer := paymentapp.NewConsumer(
+		store, &sequenceIDGenerator{prefix: "query-payment-consumer"}, fixedClock{},
+	)
+	payload, err := json.Marshal(event.OrderCreatedV1{
+		OrderID: createdOrder.Order.ID(), CustomerID: "query-customer",
+		ProductID: "product-1", Quantity: 1, TotalCents: 12900, OccurredAt: fixedClock{}.Now(),
+	})
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	message, err := outbox.NewMessage(
+		"query-payment-message", orderapp.OrderCreatedTopic, createdOrder.Order.ID(),
+		payload, fixedClock{}.Now(),
+	)
+	if err != nil {
+		t.Fatalf("NewMessage() error = %v", err)
+	}
+	if _, err := consumer.Consume(ctx, message); err != nil {
+		t.Fatalf("Consume() error = %v", err)
+	}
+
+	got, err := store.GetPaymentByOrderIDAndCustomerID(
+		ctx, createdOrder.Order.ID(), "query-customer",
+	)
+	if err != nil || got.OrderID() != createdOrder.Order.ID() {
+		t.Fatalf("owner query = %+v, %v", got, err)
+	}
+	if _, err := store.GetPaymentByOrderIDAndCustomerID(
+		ctx, createdOrder.Order.ID(), "other-customer",
+	); !errors.Is(err, payment.ErrPaymentNotFound) {
+		t.Fatalf("cross-customer query error = %v, want payment not found", err)
+	}
+}

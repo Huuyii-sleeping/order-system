@@ -144,6 +144,26 @@ func (s *PaymentStore) GetPaymentByOrderID(
 	return s.paymentsByID[paymentID], nil
 }
 
+func (s *PaymentStore) GetPaymentByOrderIDAndCustomerID(
+	ctx context.Context, orderID, customerID string,
+) (payment.Payment, error) {
+	if err := ctx.Err(); err != nil {
+		return payment.Payment{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	paymentID, exists := s.paymentIDByOrder[strings.TrimSpace(orderID)]
+	if !exists {
+		return payment.Payment{}, payment.ErrPaymentNotFound
+	}
+	got := s.paymentsByID[paymentID]
+	if got.CustomerID() != strings.TrimSpace(customerID) {
+		// 不区分“资源不存在”和“属于其他用户”，避免泄露支付是否存在。
+		return payment.Payment{}, payment.ErrPaymentNotFound
+	}
+	return got, nil
+}
+
 func (s *PaymentStore) ClaimTasks(
 	ctx context.Context, leaseID string, batchSize int, now, lockedUntil time.Time,
 ) ([]paymentapp.Task, error) {
