@@ -14,6 +14,7 @@ import (
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
 	"example.com/order-system/internal/domain/order"
+	"example.com/order-system/internal/platform/telemetry"
 )
 
 var ErrIdempotencyConflict = errors.New("idempotency key was already used for another order request")
@@ -159,6 +160,7 @@ func (s *Service) CreateOrder(ctx context.Context, command CreateOrderCommand) (
 		if err != nil {
 			return fmt.Errorf("create order event: %w", err)
 		}
+		message.TraceContext = telemetry.Capture(ctx)
 		if err := tx.SaveOutboxMessage(message); err != nil {
 			return fmt.Errorf("save order event: %w", err)
 		}

@@ -14,6 +14,7 @@ import (
 	"example.com/order-system/internal/application/inbox"
 	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/payment"
+	"example.com/order-system/internal/platform/telemetry"
 )
 
 var (
@@ -51,6 +52,7 @@ type Task struct {
 	IdempotencyKey string
 	Attempts       int
 	LeaseID        string
+	TraceContext   telemetry.PropagationContext
 }
 
 func NewTask(id string, created payment.Payment) (Task, error) {
@@ -122,6 +124,7 @@ func (c *Consumer) Consume(ctx context.Context, message outbox.Message) (Consume
 		if err != nil {
 			return fmt.Errorf("create payment task: %w", err)
 		}
+		task.TraceContext = telemetry.Capture(ctx)
 
 		if err := tx.SavePayment(created); err != nil {
 			return fmt.Errorf("save payment: %w", err)

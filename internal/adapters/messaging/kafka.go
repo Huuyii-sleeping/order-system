@@ -9,12 +9,18 @@ import (
 	"time"
 
 	"example.com/order-system/internal/application/outbox"
+	"example.com/order-system/internal/platform/telemetry"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
-	messageIDHeader  = "order-system-message-id"
-	occurredAtHeader = "order-system-occurred-at"
+	messageIDHeader   = "order-system-message-id"
+	occurredAtHeader  = "order-system-occurred-at"
+	traceParentHeader = "traceparent"
+	traceStateHeader  = "tracestate"
 )
 
 type syncProducer interface {
@@ -46,11 +52,29 @@ func NewKafkaPublisher(brokers []string) (*KafkaPublisher, error) {
 }
 
 func (p *KafkaPublisher) Publish(ctx context.Context, message outbox.Message) error {
+	if !trace.SpanContextFromContext(ctx).IsValid() {
+		ctx = telemetry.Restore(ctx, message.TraceContext)
+	}
+	ctx, span := telemetry.Tracer("order-system/messaging").Start(
+		ctx, message.Topic+" publish",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "kafka"),
+			attribute.String("messaging.destination.name", message.Topic),
+			attribute.String("messaging.message.id", message.ID),
+		),
+	)
+	defer span.End()
+	message.TraceContext = telemetry.Capture(ctx)
 	record, err := recordFromMessage(message)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
 	if err := p.producer.ProduceSync(ctx, record).FirstErr(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("produce kafka message %q: %w", message.ID, err)
 	}
 	return nil
@@ -370,7 +394,22 @@ func (c *KafkaConsumer) handleRecord(ctx context.Context, record *kgo.Record) er
 	if !ok || handler == nil {
 		return fmt.Errorf("no handler for kafka topic %q", message.Topic)
 	}
-	if err := handler.Handle(ctx, message); err != nil {
+	consumerContext := telemetry.Restore(ctx, message.TraceContext)
+	consumerContext, span := telemetry.Tracer("order-system/messaging").Start(
+		consumerContext, message.Topic+" process",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "kafka"),
+			attribute.String("messaging.destination.name", message.Topic),
+			attribute.String("messaging.message.id", message.ID),
+			attribute.Int64("messaging.kafka.offset", record.Offset),
+			attribute.Int("messaging.kafka.partition", int(record.Partition)),
+		),
+	)
+	defer span.End()
+	if err := handler.Handle(consumerContext, message); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("handle kafka topic %q: %w", message.Topic, err)
 	}
 	return nil
@@ -432,10 +471,10 @@ func recordFromMessage(message outbox.Message) (*kgo.Record, error) {
 	return &kgo.Record{
 		Topic: normalized.Topic, Key: []byte(normalized.Key), Value: append([]byte(nil), normalized.Payload...),
 		Timestamp: normalized.OccurredAt,
-		Headers: []kgo.RecordHeader{
+		Headers: appendTraceHeaders([]kgo.RecordHeader{
 			{Key: messageIDHeader, Value: []byte(normalized.ID)},
 			{Key: occurredAtHeader, Value: []byte(normalized.OccurredAt.Format(time.RFC3339Nano))},
-		},
+		}, message.TraceContext),
 	}, nil
 }
 
@@ -461,10 +500,42 @@ func messageFromRecord(record *kgo.Record) (outbox.Message, error) {
 	if err != nil {
 		return outbox.Message{}, fmt.Errorf("decode kafka message: %w", err)
 	}
+	traceParent, err := optionalUniqueHeader(record.Headers, traceParentHeader)
+	if err != nil {
+		return outbox.Message{}, fmt.Errorf("decode kafka message: %w", err)
+	}
+	traceState, err := optionalUniqueHeader(record.Headers, traceStateHeader)
+	if err != nil {
+		return outbox.Message{}, fmt.Errorf("decode kafka message: %w", err)
+	}
+	message.TraceContext = telemetry.PropagationContext{TraceParent: traceParent, TraceState: traceState}
 	return message, nil
 }
 
+func appendTraceHeaders(
+	headers []kgo.RecordHeader, captured telemetry.PropagationContext,
+) []kgo.RecordHeader {
+	if captured.TraceParent != "" {
+		headers = append(headers, kgo.RecordHeader{Key: traceParentHeader, Value: []byte(captured.TraceParent)})
+	}
+	if captured.TraceState != "" {
+		headers = append(headers, kgo.RecordHeader{Key: traceStateHeader, Value: []byte(captured.TraceState)})
+	}
+	return headers
+}
+
 func uniqueHeader(headers []kgo.RecordHeader, key string) (string, error) {
+	value, err := optionalUniqueHeader(headers, key)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("missing kafka header %q", key)
+	}
+	return value, nil
+}
+
+func optionalUniqueHeader(headers []kgo.RecordHeader, key string) (string, error) {
 	var value string
 	found := false
 	for _, header := range headers {
@@ -477,8 +548,8 @@ func uniqueHeader(headers []kgo.RecordHeader, key string) (string, error) {
 		found = true
 		value = string(header.Value)
 	}
-	if !found || strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("missing kafka header %q", key)
+	if !found {
+		return "", nil
 	}
 	return value, nil
 }

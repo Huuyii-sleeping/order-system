@@ -6,6 +6,10 @@ import (
 	"log/slog"
 
 	"example.com/order-system/internal/application/outbox"
+	"example.com/order-system/internal/platform/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type MessageHandler interface {
@@ -34,12 +38,29 @@ func (p *DirectPublisher) Publish(ctx context.Context, message outbox.Message) e
 	if !ok || handler == nil {
 		return fmt.Errorf("no handler for topic %q", message.Topic)
 	}
-	if err := handler.Handle(ctx, message); err != nil {
+	consumerContext := ctx
+	if !trace.SpanContextFromContext(ctx).IsValid() {
+		consumerContext = telemetry.Restore(ctx, message.TraceContext)
+	}
+	consumerContext, span := telemetry.Tracer("order-system/messaging").Start(
+		consumerContext, message.Topic+" process",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "direct"),
+			attribute.String("messaging.destination.name", message.Topic),
+			attribute.String("messaging.message.id", message.ID),
+		),
+	)
+	defer span.End()
+	if err := handler.Handle(consumerContext, message); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("handle topic %q: %w", message.Topic, err)
 	}
 	if p.logger != nil {
-		p.logger.InfoContext(ctx, "domain event handled",
+		p.logger.InfoContext(consumerContext, "domain event handled",
 			"message_id", message.ID, "topic", message.Topic, "key", message.Key,
+			"trace_id", telemetry.TraceID(consumerContext),
 		)
 	}
 	return nil

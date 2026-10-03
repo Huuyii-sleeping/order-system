@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"example.com/order-system/internal/transport/httpapi"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type HTTPMetricsStub struct {
@@ -111,5 +114,30 @@ func TestHTTPMetricsBoundsUnknownRoutes(t *testing.T) {
 
 	if metrics.route != "unmatched" || metrics.statusCode != http.StatusNotFound {
 		t.Errorf("metric result = route %q status %d", metrics.route, metrics.statusCode)
+	}
+}
+
+func TestHTTPTracingUsesRouteTemplate(t *testing.T) {
+	originalProvider := otel.GetTracerProvider()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { otel.SetTracerProvider(originalProvider) })
+
+	router := httpapi.NewRouter(
+		catalogQueriesStub{}, authenticatedAs("customer-1"), &orderUseCasesStub{},
+	)
+	request := httptest.NewRequest(http.MethodGet, "/orders/order-123", nil)
+	request.Header.Set("Authorization", "Bearer access-token")
+	response := httptest.NewRecorder()
+
+	httpapi.WithTracing(router).ServeHTTP(response, request)
+
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	if spans[0].Name() != "GET /orders/{orderID}" {
+		t.Fatalf("span name = %q, want route template", spans[0].Name())
 	}
 }

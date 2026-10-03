@@ -251,9 +251,11 @@ func (tx *orderTransaction) SaveOrder(created order.Order) error {
 func (tx *orderTransaction) SaveOutboxMessage(message outbox.Message) error {
 	_, err := tx.tx.ExecContext(tx.ctx, `
 		INSERT INTO outbox_messages (
-			id, topic, message_key, payload, occurred_at, next_attempt_at
-		) VALUES ($1, $2, $3, $4, $5, $5)
-	`, message.ID, message.Topic, message.Key, []byte(message.Payload), message.OccurredAt)
+			id, topic, message_key, payload, occurred_at, next_attempt_at,
+			trace_parent, trace_state
+		) VALUES ($1, $2, $3, $4, $5, $5, $6, $7)
+	`, message.ID, message.Topic, message.Key, []byte(message.Payload), message.OccurredAt,
+		nullableText(message.TraceContext.TraceParent), nullableText(message.TraceContext.TraceState))
 	if err != nil {
 		return fmt.Errorf("insert outbox message: %w", err)
 	}

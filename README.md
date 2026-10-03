@@ -22,6 +22,9 @@ go run ./cmd/api
 - `GET /readyz`：readiness，检查当前实例依赖的存储是否可用。
 - `GET /metrics`：Prometheus 文本格式的进程、HTTP 与消息指标。
 
+配置 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 后，应用还会通过 OTLP/HTTP 导出
+OpenTelemetry Trace；默认不采样、不导出。
+
 ```bash
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
@@ -183,7 +186,7 @@ Kafka 模式还会暴露以下消息指标：
 消息 ID 或错误文本，避免产生无法控制的 Prometheus 时间序列。Lag 是当前实例最近一次
 Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失时会删除对应序列。
 
-## 使用 Prometheus 和 Grafana
+## 使用 Prometheus、Tempo 和 Grafana
 
 应用在宿主机启动后，可以启动本地观测栈：
 
@@ -191,11 +194,15 @@ Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失�
 make observability-up
 ```
 
-Prometheus 通过 `host.docker.internal:8080/metrics` 每 5 秒抓取应用指标，Grafana
-启动时自动配置 Prometheus 数据源并加载 `Order System Overview` 仪表盘：
+需要观察完整 Kafka 异步 Trace 时，使用 `make run-kafka-traced` 启动应用；普通
+`make run-kafka` 不配置 Trace 导出，因此不依赖 Tempo。
+
+Prometheus 通过 `host.docker.internal:8080/metrics` 每 5 秒抓取应用指标；应用通过
+OTLP/HTTP 把 Trace 发给 Tempo。Grafana 启动时自动配置两个数据源并加载指标仪表盘：
 
 - Prometheus：<http://127.0.0.1:9090>
 - Prometheus 告警：<http://127.0.0.1:9090/alerts>
+- Tempo：<http://127.0.0.1:3200/ready>
 - Grafana：<http://127.0.0.1:3000>，本地账号和密码均为 `admin`
 
 只检查 Prometheus 配置和告警规则，不启动长期运行的容器：
@@ -204,7 +211,7 @@ Prometheus 通过 `host.docker.internal:8080/metrics` 每 5 秒抓取应用指�
 make observability-check
 ```
 
-停止观测容器但保留本地时序数据和 Grafana 数据：
+停止观测容器但保留本地指标、Trace 和 Grafana 数据：
 
 ```bash
 make observability-down
@@ -214,6 +221,10 @@ make observability-down
 Handler 失败、Offset 提交失败和死信发布。阈值是本地学习基线，生产环境应根据
 SLO、正常流量和故障预算调整。完整的启动、验证和故障模拟步骤见
 `docs/runbooks/local-observability.md`。
+
+Trace Context 使用 W3C `traceparent`/`tracestate`，并随 Outbox 与 Payment Task 一起
+持久化。因此 HTTP 请求结束或进程重启后，异步处理仍能延续同一个 Trace。Kafka Producer
+和 Consumer 使用标准 Header 传播；每次重试形成新的 Span，反映至少一次投递的真实执行历史。
 
 创建订单时，订单、库存和 `orders.created.v1` Outbox 事件会在同一个事务中
 提交。后台 Worker 按批次认领事件并发布；失败后使用指数退避重试。默认的

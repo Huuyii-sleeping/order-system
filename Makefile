@@ -1,4 +1,4 @@
-.PHONY: fmt test race vet check db-up db-down db-migrate broker-up broker-down infra-up infra-down observability-check observability-up observability-down test-integration test-kafka-integration run-postgres run-kafka
+.PHONY: fmt test race vet check db-up db-down db-migrate broker-up broker-down infra-up infra-down observability-check observability-up observability-down test-integration test-kafka-integration run-postgres run-kafka run-kafka-traced
 
 DATABASE_URL ?= postgres://order_system:order_system@127.0.0.1:5432/order_system?sslmode=disable
 
@@ -53,12 +53,13 @@ infra-down:
 observability-check:
 	docker compose run --rm --no-deps --entrypoint /bin/promtool prometheus check config /etc/prometheus/prometheus.yml
 	docker compose run --rm --no-deps --entrypoint /bin/promtool prometheus test rules /etc/prometheus/tests/order-system.test.yml
+	docker compose run --rm --no-deps tempo -config.file=/etc/tempo/tempo.yml -config.verify=true
 
 observability-up: observability-check
-	docker compose up -d --wait prometheus grafana
+	docker compose up -d --wait prometheus tempo grafana
 
 observability-down:
-	docker compose stop grafana prometheus
+	docker compose stop grafana tempo prometheus
 
 db-migrate:
 	DATABASE_URL='$(DATABASE_URL)' go run ./cmd/migrate
@@ -78,3 +79,6 @@ run-postgres:
 run-kafka:
 	STORAGE_DRIVER=postgres DATABASE_URL='$(DATABASE_URL)' \
 	MESSAGE_DRIVER=kafka KAFKA_BROKERS='127.0.0.1:19092' go run ./cmd/api
+
+run-kafka-traced:
+	OTEL_EXPORTER_OTLP_TRACES_ENDPOINT='http://127.0.0.1:4318/v1/traces' $(MAKE) run-kafka

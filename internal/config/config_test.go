@@ -20,6 +20,7 @@ func TestLoad(t *testing.T) {
 		// 空字符串表示模拟“没有配置该环境变量”。
 		appName                  string
 		httpAddr                 string
+		otlpTraceEndpoint        string
 		shutdownTimeout          string
 		readinessTimeout         string
 		storageDriver            string
@@ -247,6 +248,23 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name:              "configures OTLP trace export",
+			otlpTraceEndpoint: "http://127.0.0.1:4318/v1/traces",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				OTLPTraceEndpoint: "http://127.0.0.1:4318/v1/traces",
+				ShutdownTimeout:   10 * time.Second, ReadinessTimeout: 2 * time.Second,
+				StorageDriver: config.StorageMemory, AccessTokenTTL: 15 * time.Minute,
+				RefreshTokenTTL: 30 * 24 * time.Hour, AuthRateWindow: time.Minute,
+				LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second,
+				OutboxRetryMax: time.Minute, PaymentPollInterval: time.Second,
+				PaymentBatchSize: 10, PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
+			},
+		},
+		{
 			name:              "rejects an invalid shutdown timeout",
 			shutdownTimeout:   "ten-seconds",
 			wantErrorContains: "parse SHUTDOWN_TIMEOUT",
@@ -353,6 +371,7 @@ func TestLoad(t *testing.T) {
 			// 因此每个用例都不会污染其他用例。
 			t.Setenv("APP_NAME", tt.appName)
 			t.Setenv("HTTP_ADDR", tt.httpAddr)
+			t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", tt.otlpTraceEndpoint)
 			t.Setenv("SHUTDOWN_TIMEOUT", tt.shutdownTimeout)
 			t.Setenv("READINESS_TIMEOUT", tt.readinessTimeout)
 			t.Setenv("STORAGE_DRIVER", tt.storageDriver)

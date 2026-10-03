@@ -10,6 +10,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"example.com/order-system/internal/platform/telemetry"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RequestIDHeader 是请求 ID 在 HTTP Header 中使用的名称。
@@ -20,6 +27,7 @@ const RequestIDHeader = "X-Request-ID"
 const unmatchedRoute = "unmatched"
 
 type metricRouteContextKey struct{}
+type traceRouteContextKey struct{}
 
 type metricRouteState struct {
 	pattern string
@@ -89,7 +97,7 @@ func WithAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
 			statusCode = http.StatusOK
 		}
 
-		logger.Info(
+		logger.InfoContext(r.Context(),
 			"http request",
 			"request_id", RequestID(r.Context()),
 			"method", r.Method,
@@ -97,6 +105,7 @@ func WithAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
 			"status", statusCode,
 			"bytes", recorder.bytesWritten,
 			"duration", time.Since(startedAt),
+			"trace_id", telemetry.TraceID(r.Context()),
 		)
 	})
 }
@@ -130,6 +139,42 @@ func WithHTTPMetrics(metrics HTTPMetrics, next http.Handler) http.Handler {
 	})
 }
 
+// WithTracing 从标准 W3C Header 恢复调用方上下文，为每个 HTTP 请求创建 Server Span。
+// Span 名称在路由匹配后改成 Method + 路由模板，避免把订单 ID 变成高基数名称。
+func WithTracing(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := otel.GetTextMapPropagator().Extract(
+			r.Context(), propagation.HeaderCarrier(r.Header),
+		)
+		ctx, span := telemetry.Tracer("order-system/http").Start(
+			ctx, r.Method,
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(attribute.String("http.request.method", r.Method)),
+		)
+		routeState := &metricRouteState{}
+		ctx = context.WithValue(ctx, traceRouteContextKey{}, routeState)
+		recorder := &statusRecorder{ResponseWriter: w}
+		defer func() {
+			statusCode := recorder.statusCode
+			if statusCode == 0 {
+				statusCode = http.StatusOK
+			}
+			route := metricRoute(routeState.pattern)
+			span.SetName(r.Method + " " + route)
+			span.SetAttributes(
+				attribute.String("http.route", route),
+				attribute.Int("http.response.status_code", statusCode),
+			)
+			if statusCode >= http.StatusInternalServerError {
+				span.SetStatus(codes.Error, http.StatusText(statusCode))
+			}
+			span.End()
+		}()
+
+		next.ServeHTTP(recorder, r.WithContext(ctx))
+	})
+}
+
 func metricRoute(pattern string) string {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
@@ -143,8 +188,12 @@ func metricRoute(pattern string) string {
 
 func withMatchedRoute(next *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pattern := next.Handler(r)
 		if state, ok := r.Context().Value(metricRouteContextKey{}).(*metricRouteState); ok {
-			_, state.pattern = next.Handler(r)
+			state.pattern = pattern
+		}
+		if state, ok := r.Context().Value(traceRouteContextKey{}).(*metricRouteState); ok {
+			state.pattern = pattern
 		}
 		next.ServeHTTP(w, r)
 	})

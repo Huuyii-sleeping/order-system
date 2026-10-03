@@ -8,6 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"example.com/order-system/internal/platform/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type WorkerConfig struct {
@@ -105,32 +110,49 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 
 	var batchError error
 	for _, message := range messages {
-		if err := w.publisher.Publish(ctx, message); err != nil {
+		messageContext := telemetry.Restore(ctx, message.TraceContext)
+		messageContext, span := telemetry.Tracer("order-system/outbox").Start(
+			messageContext, "outbox dispatch",
+			trace.WithSpanKind(trace.SpanKindInternal),
+			trace.WithAttributes(
+				attribute.String("messaging.system", "outbox"),
+				attribute.String("messaging.destination.name", message.Topic),
+				attribute.String("messaging.message.id", message.ID),
+				attribute.Int("messaging.message.delivery_attempt", message.Attempts),
+			),
+		)
+		if err := w.publisher.Publish(messageContext, message); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			reason := truncateError(err.Error(), 1000)
 			nextAttemptAt := w.now().UTC().Add(w.retryDelay(message.Attempts))
 			if markErr := w.store.MarkFailed(
-				ctx, message.ID, message.LeaseID, nextAttemptAt, reason,
+				messageContext, message.ID, message.LeaseID, nextAttemptAt, reason,
 			); markErr != nil {
 				batchError = errors.Join(batchError, fmt.Errorf(
 					"mark outbox message %q failed: %w", message.ID, markErr,
 				))
 			}
 			if w.logger != nil {
-				w.logger.WarnContext(ctx, "outbox publish failed",
+				w.logger.WarnContext(messageContext, "outbox publish failed",
 					"message_id", message.ID, "topic", message.Topic,
 					"attempt", message.Attempts, "error", err,
 				)
 			}
+			span.End()
 			continue
 		}
 
 		if err := w.store.MarkPublished(
-			ctx, message.ID, message.LeaseID, w.now().UTC(),
+			messageContext, message.ID, message.LeaseID, w.now().UTC(),
 		); err != nil {
 			batchError = errors.Join(batchError, fmt.Errorf(
 				"mark outbox message %q published: %w", message.ID, err,
 			))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 		}
+		span.End()
 	}
 	return len(messages), batchError
 }

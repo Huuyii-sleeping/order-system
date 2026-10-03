@@ -12,6 +12,7 @@ import (
 	"example.com/order-system/internal/application/inbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/domain/payment"
+	"example.com/order-system/internal/platform/telemetry"
 )
 
 type PaymentStore struct {
@@ -91,9 +92,11 @@ func (tx *paymentTransaction) SavePayment(created payment.Payment) error {
 
 func (tx *paymentTransaction) SaveTask(task paymentapp.Task) error {
 	_, err := tx.tx.ExecContext(tx.ctx, `
-		INSERT INTO payment_tasks (id, payment_id, idempotency_key, next_attempt_at)
-		VALUES ($1, $2, $3, $4)
-	`, task.ID, task.Payment.ID(), task.IdempotencyKey, task.Payment.CreatedAt())
+		INSERT INTO payment_tasks (
+			id, payment_id, idempotency_key, next_attempt_at, trace_parent, trace_state
+		) VALUES ($1, $2, $3, $4, $5, $6)
+	`, task.ID, task.Payment.ID(), task.IdempotencyKey, task.Payment.CreatedAt(),
+		nullableText(task.TraceContext.TraceParent), nullableText(task.TraceContext.TraceState))
 	if err != nil {
 		return fmt.Errorf("insert payment task: %w", err)
 	}
@@ -148,6 +151,7 @@ func (s *PaymentStore) ClaimTasks(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT
 			task.id, task.payment_id, task.idempotency_key, task.attempts,
+			task.trace_parent, task.trace_state,
 			payment.order_id, payment.customer_id, payment.amount_cents,
 			payment.status, payment.provider_reference, payment.failure_reason,
 			payment.created_at, payment.updated_at
@@ -170,12 +174,14 @@ func (s *PaymentStore) ClaimTasks(
 	for rows.Next() {
 		var taskID, paymentID, idempotencyKey string
 		var attempts int
+		var traceParent, traceState sql.NullString
 		var orderID, customerID, status string
 		var amountCents int64
 		var providerReference, failureReason sql.NullString
 		var createdAt, updatedAt time.Time
 		if err := rows.Scan(
-			&taskID, &paymentID, &idempotencyKey, &attempts, &orderID, &customerID,
+			&taskID, &paymentID, &idempotencyKey, &attempts, &traceParent, &traceState,
+			&orderID, &customerID,
 			&amountCents, &status, &providerReference, &failureReason, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan payment task: %w", err)
@@ -194,6 +200,9 @@ func (s *PaymentStore) ClaimTasks(
 		tasks = append(tasks, paymentapp.Task{
 			ID: taskID, Payment: processing, IdempotencyKey: idempotencyKey,
 			Attempts: attempts + 1, LeaseID: leaseID,
+			TraceContext: telemetry.PropagationContext{
+				TraceParent: traceParent.String, TraceState: traceState.String,
+			},
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -320,9 +329,12 @@ func (s *PaymentStore) updateTask(
 		message := outcome.ResultMessage
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO outbox_messages (
-				id, topic, message_key, payload, occurred_at, next_attempt_at
-			) VALUES ($1, $2, $3, $4, $5, $5)
-		`, message.ID, message.Topic, message.Key, []byte(message.Payload), message.OccurredAt); err != nil {
+				id, topic, message_key, payload, occurred_at, next_attempt_at,
+				trace_parent, trace_state
+			) VALUES ($1, $2, $3, $4, $5, $5, $6, $7)
+		`, message.ID, message.Topic, message.Key, []byte(message.Payload), message.OccurredAt,
+			nullableText(message.TraceContext.TraceParent),
+			nullableText(message.TraceContext.TraceState)); err != nil {
 			return fmt.Errorf("insert payment result outbox message: %w", err)
 		}
 	}

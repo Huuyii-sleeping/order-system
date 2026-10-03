@@ -6,30 +6,26 @@
 
 ```text
 Order System /metrics -> Prometheus -> PromQL / alerts -> Grafana
+Order System OTLP/HTTP -> Tempo -> TraceQL -> Grafana
 ```
 
-Prometheus 和 Grafana 运行在 Docker 中，Order System 仍由宿主机上的 Go 命令启动。
+Prometheus、Tempo 和 Grafana 运行在 Docker 中，Order System 仍由宿主机上的 Go 命令启动。
 配置仅供本地学习：端口只绑定到 `127.0.0.1`，Grafana 使用公开的开发密码，
 没有配置 Alertmanager、长期存储、高可用或生产认证。
 
 ## 启动
 
-需要完整 Kafka 业务指标时，先启动依赖：
+先启动依赖和观测栈，确保应用产生第一条 Trace 前 Tempo 已经就绪：
 
 ```bash
 make infra-up
-```
-
-在第一个终端启动应用：
-
-```bash
-make run-kafka
-```
-
-在第二个终端检查规则并启动观测栈：
-
-```bash
 make observability-up
+```
+
+在另一个终端启动应用：
+
+```bash
+make run-kafka-traced
 ```
 
 `observability-up` 会先执行两类检查：
@@ -41,10 +37,15 @@ make observability-up
 
 - Prometheus Targets：<http://127.0.0.1:9090/targets>
 - Prometheus Alerts：<http://127.0.0.1:9090/alerts>
+- Tempo：<http://127.0.0.1:3200/ready>
 - Grafana：<http://127.0.0.1:3000>
 
 Grafana 本地账号和密码均为 `admin`。打开 `Order System` 文件夹中的
 `Order System Overview` 仪表盘。
+
+`make run-kafka-traced` 会设置
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces`。直接使用
+`go run ./cmd/api` 时该配置为空，应用不采样也不导出 Trace。
 
 ## 验收
 
@@ -66,6 +67,12 @@ Grafana 健康检查：
 curl -fsS http://127.0.0.1:3000/api/health | jq
 ```
 
+Tempo 就绪检查：
+
+```bash
+curl -fsS http://127.0.0.1:3200/ready
+```
+
 创建订单并等待消息链路完成后，可以在 Prometheus 查询：
 
 ```promql
@@ -73,6 +80,16 @@ sum by (route, status) (rate(order_system_http_requests_total[1m]))
 order_system_kafka_consumer_lag_records
 sum by (outcome) (rate(order_system_kafka_processing_attempts_total[5m]))
 ```
+
+在 Grafana 的 `Explore` 中选择 `Tempo` 数据源，使用 TraceQL 查询：
+
+```traceql
+{ resource.service.name = "order-system" }
+```
+
+打开一条 `POST /orders` Trace 后，应能看到 HTTP、两次 Outbox 派发、两次 Kafka
+生产与消费，以及 Payment Task。它们共用一个 TraceID，但每个异步阶段是独立 Span。
+请求已经返回后出现的 Span 时间间隔体现真实排队时间；消息重试会出现额外的消费 Span。
 
 ## 理解和模拟告警
 
@@ -91,8 +108,10 @@ sum by (outcome) (rate(order_system_kafka_processing_attempts_total[5m]))
 1. `/metrics` 无法访问：先检查应用是否启动以及监听地址。
 2. Prometheus Target 为 Down：检查 `host.docker.internal:8080` 是否能从容器访问。
 3. Prometheus 有数据但 Grafana 无图：检查自动配置的数据源和 Dashboard 是否加载。
-4. 查询有结果但告警未触发：检查表达式、`for` 持续时间和规则评估时间。
-5. 告警已触发但无人收到通知：当前没有 Alertmanager，这是预期边界。
+4. Tempo 没有 Trace：确认应用配置了 OTLP 地址、`4318` 未被占用，并等待批量导出。
+5. Trace 在异步阶段断开：检查 Outbox、Payment Task 和 Kafka Header 中的 Trace Context。
+6. 查询有结果但告警未触发：检查表达式、`for` 持续时间和规则评估时间。
+7. 告警已触发但无人收到通知：当前没有 Alertmanager，这是预期边界。
 
 ## 停止
 

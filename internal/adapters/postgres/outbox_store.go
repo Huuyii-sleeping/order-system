@@ -46,7 +46,8 @@ func (s *OutboxStore) Claim(
 		FROM candidates
 		WHERE message.id = candidates.id
 		RETURNING message.id, message.topic, message.message_key, message.payload,
-		          message.occurred_at, message.attempts, message.lease_id
+		          message.occurred_at, message.attempts, message.lease_id,
+		          message.trace_parent, message.trace_state
 	`, now, batchSize, leaseID, lockedUntil)
 	if err != nil {
 		return nil, fmt.Errorf("claim outbox messages: %w", err)
@@ -56,12 +57,16 @@ func (s *OutboxStore) Claim(
 	messages := make([]outbox.Message, 0, batchSize)
 	for rows.Next() {
 		var message outbox.Message
+		var traceParent, traceState sql.NullString
 		if err := rows.Scan(
 			&message.ID, &message.Topic, &message.Key, &message.Payload,
 			&message.OccurredAt, &message.Attempts, &message.LeaseID,
+			&traceParent, &traceState,
 		); err != nil {
 			return nil, fmt.Errorf("scan outbox message: %w", err)
 		}
+		message.TraceContext.TraceParent = traceParent.String
+		message.TraceContext.TraceState = traceState.String
 		messages = append(messages, message)
 	}
 	if err := rows.Err(); err != nil {

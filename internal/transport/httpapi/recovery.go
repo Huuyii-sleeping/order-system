@@ -1,9 +1,13 @@
 package httpapi
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // WithRecovery 捕获后续 Handler 中未处理的 panic。
@@ -27,6 +31,9 @@ func WithRecovery(logger *slog.Logger, next http.Handler) http.Handler {
 			if recovered == nil {
 				return
 			}
+			span := trace.SpanFromContext(r.Context())
+			span.RecordError(fmt.Errorf("panic: %v", recovered))
+			span.SetStatus(codes.Error, "panic recovered")
 
 			logger.Error(
 				"panic recovered",

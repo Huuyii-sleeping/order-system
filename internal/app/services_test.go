@@ -11,6 +11,10 @@ import (
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
 	"example.com/order-system/internal/domain/order"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type dependencyPingerStub struct {
@@ -69,7 +73,17 @@ func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
 }
 
 func TestMemoryServicesCompletesPaymentSaga(t *testing.T) {
-	ctx := context.Background()
+	originalProvider := otel.GetTracerProvider()
+	originalPropagator := otel.GetTextMapPropagator()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(originalProvider)
+		otel.SetTextMapPropagator(originalPropagator)
+	})
+	ctx, rootSpan := provider.Tracer("test").Start(context.Background(), "POST /orders")
 	cfg := config.Config{
 		StorageDriver: config.StorageMemory, MessageDriver: config.MessageDirect,
 		AccessTokenTTL: time.Minute, RefreshTokenTTL: time.Hour, BcryptCost: 4,
@@ -112,5 +126,17 @@ func TestMemoryServicesCompletesPaymentSaga(t *testing.T) {
 	completed, err := services.Orders.GetOrder(ctx, "customer-1", created.Order.ID())
 	if err != nil || completed.Status() != order.StatusConfirmed {
 		t.Fatalf("completed order = %+v, %v; want confirmed", completed, err)
+	}
+	rootTraceID := rootSpan.SpanContext().TraceID()
+	rootSpan.End()
+	spans := recorder.Ended()
+	if len(spans) != 6 {
+		t.Fatalf("ended spans = %d, want root plus five asynchronous stages", len(spans))
+	}
+	for _, span := range spans {
+		if span.SpanContext().TraceID() != rootTraceID {
+			t.Fatalf("span %q TraceID = %s, want %s",
+				span.Name(), span.SpanContext().TraceID(), rootTraceID)
+		}
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"example.com/order-system/internal/platform/telemetry"
 )
 
 var (
@@ -17,13 +19,14 @@ var (
 
 // Message 是写入 Outbox 的稳定事件信封。Attempts 和 LeaseID 由存储在认领时填充。
 type Message struct {
-	ID         string
-	Topic      string
-	Key        string
-	Payload    json.RawMessage
-	OccurredAt time.Time
-	Attempts   int
-	LeaseID    string
+	ID           string
+	Topic        string
+	Key          string
+	Payload      json.RawMessage
+	OccurredAt   time.Time
+	Attempts     int
+	LeaseID      string
+	TraceContext telemetry.PropagationContext
 }
 
 func NewMessage(

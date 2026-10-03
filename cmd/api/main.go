@@ -15,6 +15,7 @@ import (
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
 	platformmetrics "example.com/order-system/internal/platform/metrics"
+	"example.com/order-system/internal/platform/telemetry"
 	"example.com/order-system/internal/transport/httpapi"
 )
 
@@ -30,6 +31,22 @@ func main() {
 		logger.Error("load config failed", "error", err)
 		os.Exit(1)
 	}
+	telemetryStartupContext, cancelTelemetryStartup := context.WithTimeout(context.Background(), 10*time.Second)
+	tracerProvider, err := telemetry.NewProvider(telemetryStartupContext, telemetry.Config{
+		ServiceName: cfg.AppName, Endpoint: cfg.OTLPTraceEndpoint,
+	})
+	cancelTelemetryStartup()
+	if err != nil {
+		logger.Error("initialize telemetry failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracerProvider.Shutdown(shutdownContext); err != nil {
+			logger.Error("shutdown telemetry failed", "error", err)
+		}
+	}()
 	metricRegistry := platformmetrics.NewRegistry()
 
 	// main 是组合根：根据配置创建内存或 PostgreSQL 适配器，
@@ -127,17 +144,20 @@ func main() {
 	//   ← recovery
 	//       ← metrics
 	//           ← access log
-	//               ← request ID
+	//               ← tracing
+	//                   ← request ID
 	//
 	// Request ID 放在最外层，让后续日志都能关联请求。
 	// Access Log 放在 Recovery 外层，让 panic 被转换成 500 后，
 	// 仍能记录正确的状态码和响应大小。
 	handler := httpapi.WithRequestID(
-		httpapi.WithAccessLog(
-			logger,
-			httpapi.WithHTTPMetrics(
-				metricRegistry,
-				httpapi.WithRecovery(logger, router),
+		httpapi.WithTracing(
+			httpapi.WithAccessLog(
+				logger,
+				httpapi.WithHTTPMetrics(
+					metricRegistry,
+					httpapi.WithRecovery(logger, router),
+				),
 			),
 		),
 	)

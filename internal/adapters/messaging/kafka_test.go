@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"example.com/order-system/internal/application/outbox"
+	"example.com/order-system/internal/platform/telemetry"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -36,6 +37,10 @@ func TestKafkaPublisherPreservesMessageEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMessage() error = %v", err)
 	}
+	want.TraceContext = telemetry.PropagationContext{
+		TraceParent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		TraceState:  "vendor=value",
+	}
 	if err := publisher.Publish(context.Background(), want); err != nil {
 		t.Fatalf("Publish() error = %v", err)
 	}
@@ -44,7 +49,8 @@ func TestKafkaPublisherPreservesMessageEnvelope(t *testing.T) {
 		t.Fatalf("messageFromRecord() error = %v", err)
 	}
 	if got.ID != want.ID || got.Topic != want.Topic || got.Key != want.Key ||
-		string(got.Payload) != string(want.Payload) || !got.OccurredAt.Equal(want.OccurredAt) {
+		string(got.Payload) != string(want.Payload) || !got.OccurredAt.Equal(want.OccurredAt) ||
+		got.TraceContext != want.TraceContext {
 		t.Fatalf("round-trip message = %+v, want %+v", got, want)
 	}
 }

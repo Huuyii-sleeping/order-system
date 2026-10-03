@@ -14,6 +14,10 @@ import (
 	"example.com/order-system/internal/application/event"
 	"example.com/order-system/internal/application/outbox"
 	"example.com/order-system/internal/domain/payment"
+	"example.com/order-system/internal/platform/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type TaskStore interface {
@@ -140,78 +144,106 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 
 	var batchError error
 	for _, task := range tasks {
-		// IdempotencyKey 在任务创建时固定，所有重试都必须复用它。
-		request := ChargeRequest{
-			PaymentID: task.Payment.ID(), OrderID: task.Payment.OrderID(),
-			AmountCents: task.Payment.AmountCents(), IdempotencyKey: task.IdempotencyKey,
-		}
-		result, providerErr := w.provider.Charge(ctx, request)
-		at := w.now().UTC()
-		if providerErr != nil {
-			// 网络错误不能证明扣款失败：请求可能已被第三方执行，只是响应丢失。
-			// 因此进入 unknown 并使用相同幂等键重试，而不是直接标记 failed。
-			reason := truncateReason(providerErr.Error(), 1000)
-			unknown, stateErr := task.Payment.MarkUnknown(reason, at)
-			if stateErr != nil {
-				batchError = errors.Join(batchError, stateErr)
-				continue
-			}
-			outcome := TaskOutcome{Payment: unknown, Reason: reason}
-			if err := w.store.RetryTask(ctx, task.ID, task.LeaseID, outcome, at.Add(w.retryDelay(task.Attempts))); err != nil {
-				batchError = errors.Join(batchError, fmt.Errorf("retry payment task %q: %w", task.ID, err))
-			}
-			continue
-		}
-
-		var outcome TaskOutcome
-		switch result.Status {
-		case ChargeSucceeded:
-			updated, stateErr := task.Payment.Succeed(result.ProviderReference, at)
-			if stateErr != nil {
-				batchError = errors.Join(batchError, stateErr)
-				continue
-			}
-			outcome = TaskOutcome{Payment: updated}
-		case ChargeDeclined:
-			// 只有第三方明确拒绝时，才进入不可自动重试的 failed 状态。
-			reason := truncateReason(result.Reason, 1000)
-			updated, stateErr := task.Payment.Fail(reason, at)
-			if stateErr != nil {
-				batchError = errors.Join(batchError, stateErr)
-				continue
-			}
-			outcome = TaskOutcome{Payment: updated, Reason: reason}
-		default:
-			reason := fmt.Sprintf("payment provider returned invalid status %q", result.Status)
-			unknown, stateErr := task.Payment.MarkUnknown(reason, at)
-			if stateErr != nil {
-				batchError = errors.Join(batchError, stateErr)
-				continue
-			}
-			if err := w.store.RetryTask(
-				ctx, task.ID, task.LeaseID, TaskOutcome{Payment: unknown, Reason: reason},
-				at.Add(w.retryDelay(task.Attempts)),
-			); err != nil {
-				batchError = errors.Join(batchError, fmt.Errorf("retry payment task %q: %w", task.ID, err))
-			}
-			continue
-		}
-		resultMessage, err := w.newPaymentResultMessage(outcome.Payment)
-		if err != nil {
-			batchError = errors.Join(batchError, fmt.Errorf(
-				"create payment result event for task %q: %w", task.ID, err,
-			))
-			continue
-		}
-		outcome.ResultMessage = resultMessage
-		if err := w.store.CompleteTask(ctx, task.ID, task.LeaseID, outcome, at); err != nil {
-			batchError = errors.Join(batchError, fmt.Errorf("complete payment task %q: %w", task.ID, err))
+		if err := w.processTask(ctx, task); err != nil {
+			batchError = errors.Join(batchError, err)
 		}
 	}
 	return len(tasks), batchError
 }
 
-func (w *Worker) newPaymentResultMessage(completed payment.Payment) (outbox.Message, error) {
+func (w *Worker) processTask(ctx context.Context, task Task) error {
+	taskContext := telemetry.Restore(ctx, task.TraceContext)
+	taskContext, span := telemetry.Tracer("order-system/payment").Start(
+		taskContext, "payment provider charge",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "payment_task"),
+			attribute.String("messaging.message.id", task.ID),
+			attribute.Int("messaging.message.delivery_attempt", task.Attempts),
+		),
+	)
+	defer span.End()
+
+	// IdempotencyKey 在任务创建时固定，所有重试都必须复用它。
+	request := ChargeRequest{
+		PaymentID: task.Payment.ID(), OrderID: task.Payment.OrderID(),
+		AmountCents: task.Payment.AmountCents(), IdempotencyKey: task.IdempotencyKey,
+	}
+	result, providerErr := w.provider.Charge(taskContext, request)
+	at := w.now().UTC()
+	if providerErr != nil {
+		span.RecordError(providerErr)
+		span.SetStatus(codes.Error, providerErr.Error())
+		// 网络错误不能证明扣款失败：请求可能已被第三方执行，只是响应丢失。
+		// 因此进入 unknown 并使用相同幂等键重试，而不是直接标记 failed。
+		reason := truncateReason(providerErr.Error(), 1000)
+		unknown, stateErr := task.Payment.MarkUnknown(reason, at)
+		if stateErr != nil {
+			span.RecordError(stateErr)
+			return stateErr
+		}
+		outcome := TaskOutcome{Payment: unknown, Reason: reason}
+		if err := w.store.RetryTask(taskContext, task.ID, task.LeaseID, outcome, at.Add(w.retryDelay(task.Attempts))); err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("retry payment task %q: %w", task.ID, err)
+		}
+		return nil
+	}
+
+	var outcome TaskOutcome
+	switch result.Status {
+	case ChargeSucceeded:
+		updated, stateErr := task.Payment.Succeed(result.ProviderReference, at)
+		if stateErr != nil {
+			span.RecordError(stateErr)
+			span.SetStatus(codes.Error, stateErr.Error())
+			return stateErr
+		}
+		outcome = TaskOutcome{Payment: updated}
+	case ChargeDeclined:
+		// 只有第三方明确拒绝时，才进入不可自动重试的 failed 状态。
+		reason := truncateReason(result.Reason, 1000)
+		updated, stateErr := task.Payment.Fail(reason, at)
+		if stateErr != nil {
+			span.RecordError(stateErr)
+			span.SetStatus(codes.Error, stateErr.Error())
+			return stateErr
+		}
+		outcome = TaskOutcome{Payment: updated, Reason: reason}
+	default:
+		reason := fmt.Sprintf("payment provider returned invalid status %q", result.Status)
+		unknown, stateErr := task.Payment.MarkUnknown(reason, at)
+		if stateErr != nil {
+			span.RecordError(stateErr)
+			span.SetStatus(codes.Error, stateErr.Error())
+			return stateErr
+		}
+		if err := w.store.RetryTask(
+			taskContext, task.ID, task.LeaseID, TaskOutcome{Payment: unknown, Reason: reason},
+			at.Add(w.retryDelay(task.Attempts)),
+		); err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("retry payment task %q: %w", task.ID, err)
+		}
+		span.SetStatus(codes.Error, reason)
+		return nil
+	}
+	resultMessage, err := w.newPaymentResultMessage(taskContext, outcome.Payment)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("create payment result event for task %q: %w", task.ID, err)
+	}
+	outcome.ResultMessage = resultMessage
+	if err := w.store.CompleteTask(taskContext, task.ID, task.LeaseID, outcome, at); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("complete payment task %q: %w", task.ID, err)
+	}
+	return nil
+}
+
+func (w *Worker) newPaymentResultMessage(ctx context.Context, completed payment.Payment) (outbox.Message, error) {
 	messageID, err := w.newID()
 	if err != nil {
 		return outbox.Message{}, fmt.Errorf("generate payment result event ID: %w", err)
@@ -246,6 +278,7 @@ func (w *Worker) newPaymentResultMessage(completed payment.Payment) (outbox.Mess
 	if err != nil {
 		return outbox.Message{}, fmt.Errorf("create payment result event: %w", err)
 	}
+	message.TraceContext = telemetry.Capture(ctx)
 	return message, nil
 }
 

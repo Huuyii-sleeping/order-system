@@ -19,7 +19,8 @@ const (
 type Config struct {
 	AppName string
 
-	HTTPAddr string
+	HTTPAddr          string
+	OTLPTraceEndpoint string
 
 	ShutdownTimeout  time.Duration
 	ReadinessTimeout time.Duration
@@ -59,6 +60,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		AppName:                  envOrDefault("APP_NAME", "order-system"),
 		HTTPAddr:                 envOrDefault("HTTP_ADDR", ":8080"),
+		OTLPTraceEndpoint:        strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")),
 		ShutdownTimeout:          10 * time.Second,
 		ReadinessTimeout:         2 * time.Second,
 		StorageDriver:            strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
