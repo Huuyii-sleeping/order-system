@@ -89,6 +89,7 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/application/event/`：保存生产者与消费者共同依赖的版本化集成事件契约。
 - `internal/adapters/memory/`：提供默认的进程内存实现。
 - `internal/adapters/postgres/`：提供连接池、订单、Outbox、Inbox、支付任务和迁移实现。
+- `internal/adapters/redis/`：提供商品详情 Cache Aside 和跨实例共享的认证固定窗口限流。
 - `internal/adapters/messaging/`：提供进程内和 Kafka 两种消息适配器，负责 Record
   信封、生产确认、消费者组、有限重试、死信隔离和 offset 提交。
 - `internal/adapters/paymentprovider/`：提供带稳定幂等键的模拟第三方支付适配器。
@@ -104,6 +105,6 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。
 - `internal/app/`：根据配置选择存储适配器并完成依赖组装。
 
-后续会在缓存和部署等真实需求出现时继续填充目录。
+后续会在部署等真实需求出现时继续填充目录。
 
 不要为了填满目录而创建接口或文件。目录是地图，不是任务清单。

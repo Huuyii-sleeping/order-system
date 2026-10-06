@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -12,6 +13,7 @@ import (
 	"example.com/order-system/internal/adapters/password"
 	"example.com/order-system/internal/adapters/paymentprovider"
 	"example.com/order-system/internal/adapters/postgres"
+	redisadapter "example.com/order-system/internal/adapters/redis"
 	"example.com/order-system/internal/adapters/sessiontoken"
 	authapp "example.com/order-system/internal/application/auth"
 	catalogapp "example.com/order-system/internal/application/catalog"
@@ -21,6 +23,7 @@ import (
 	"example.com/order-system/internal/config"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/inventory"
+	"example.com/order-system/internal/platform/ratelimit"
 )
 
 type Services struct {
@@ -33,16 +36,22 @@ type Services struct {
 	PaymentQueries  *paymentapp.QueryService
 	PaymentTasks    paymentapp.TaskStore
 	PaymentProvider paymentapp.Provider
+	LoginLimiter    ratelimit.Limiter
+	RefreshLimiter  ratelimit.Limiter
 
 	readiness []dependencyPinger
-	closer    io.Closer
+	closers   []io.Closer
 }
 
 type dependencyPinger interface {
 	PingContext(context.Context) error
 }
 
-func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
+type cacheMetrics interface {
+	RecordCatalogCacheOperation(string)
+}
+
+func NewServices(ctx context.Context, cfg config.Config, metrics cacheMetrics) (*Services, error) {
 	var products catalogapp.Repository
 	var identities authapp.Store
 	var orders interface {
@@ -56,7 +65,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		paymentapp.QueryStore
 	}
 	var readiness []dependencyPinger
-	var closer io.Closer
+	var closers []io.Closer
 
 	switch cfg.StorageDriver {
 	case config.StorageMemory:
@@ -85,7 +94,7 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		if err != nil {
 			return nil, err
 		}
-		closer = db
+		closers = append(closers, db)
 		readiness = append(readiness, db)
 		products = postgres.NewCatalogRepository(db)
 		identities = postgres.NewIdentityStore(db)
@@ -97,12 +106,37 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		return nil, fmt.Errorf("unsupported storage driver %q", cfg.StorageDriver)
 	}
 
+	// 商品缓存只装饰查询用例。创建订单仍读取事实仓库，避免未来商品价格发生
+	// 变更时，把缓存中的旧价格写进新订单。
+	catalogProducts := products
+	loginLimiter := ratelimit.NewFixedWindow(cfg.LoginRateLimit, cfg.AuthRateWindow)
+	refreshLimiter := ratelimit.NewFixedWindow(cfg.RefreshRateLimit, cfg.AuthRateWindow)
+	if cfg.CacheDriver == config.CacheRedis {
+		client, err := redisadapter.Open(ctx, cfg.RedisURL)
+		if err != nil {
+			closeAll(closers)
+			return nil, fmt.Errorf("open redis: %w", err)
+		}
+		closers = append(closers, client)
+		readiness = append(readiness, client)
+		catalogProducts = redisadapter.NewCatalogRepository(
+			products, client, cfg.RedisKeyPrefix, cfg.CatalogCacheTTL,
+			cfg.CatalogNotFoundCacheTTL, cfg.CatalogLoadTimeout, metrics,
+		)
+		loginLimiter = redisadapter.NewFixedWindowRateLimiter(
+			client, cfg.RedisKeyPrefix+":rate:login", cfg.LoginRateLimit, cfg.AuthRateWindow,
+		)
+		refreshLimiter = redisadapter.NewFixedWindowRateLimiter(
+			client, cfg.RedisKeyPrefix+":rate:refresh", cfg.RefreshRateLimit, cfg.AuthRateWindow,
+		)
+	}
+
 	paymentConsumer := paymentapp.NewConsumer(
 		paymentStore, idgenerator.Random{}, clock.System{},
 	)
 	paymentResultConsumer := orderapp.NewPaymentResultConsumer(orders, clock.System{})
 	return &Services{
-		Catalog: catalogapp.NewService(products),
+		Catalog: catalogapp.NewService(catalogProducts),
 		Auth: authapp.NewService(
 			identities,
 			password.NewBcrypt(cfg.BcryptCost),
@@ -124,8 +158,10 @@ func NewServices(ctx context.Context, cfg config.Config) (*Services, error) {
 		PaymentQueries:  paymentapp.NewQueryService(paymentStore),
 		PaymentTasks:    paymentStore,
 		PaymentProvider: paymentprovider.NewSimulated(),
+		LoginLimiter:    loginLimiter,
+		RefreshLimiter:  refreshLimiter,
 		readiness:       readiness,
-		closer:          closer,
+		closers:         closers,
 	}, nil
 }
 
@@ -151,10 +187,17 @@ func (s *Services) CheckReadiness(ctx context.Context) error {
 }
 
 func (s *Services) Close() error {
-	if s.closer == nil {
-		return nil
+	return closeAll(s.closers)
+}
+
+func closeAll(closers []io.Closer) error {
+	var closeErrors []error
+	for index := len(closers) - 1; index >= 0; index-- {
+		if err := closers[index].Close(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
 	}
-	return s.closer.Close()
+	return errors.Join(closeErrors...)
 }
 
 func seedProducts() ([]catalog.Product, error) {

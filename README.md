@@ -4,7 +4,8 @@
 库存预占、事务下单、幂等创建订单、用户注册登录、短期 Access Token、
 Refresh Token 轮换、订单所有权隔离、HTTP 中间件，以及内存和 PostgreSQL
 两种存储实现。订单创建事件会可靠地驱动支付消费者和支付任务状态机；消息层
-支持默认的进程内模式，以及使用 Redpanda 本地运行的 Kafka 协议模式。
+支持默认的进程内模式，以及使用 Redpanda 本地运行的 Kafka 协议模式。Redis 可选地
+提供商品详情缓存和多实例共享的认证限流。
 
 ## 直接运行（内存模式）
 
@@ -63,6 +64,41 @@ make db-down
 `db-down` 不删除数据卷。配置示例见 `.env.example`。数据库迁移由
 `cmd/migrate` 执行，已执行版本记录在 `schema_migrations` 表中。
 
+## 使用 Redis 缓存和共享限流
+
+启动本地 Redis：
+
+```bash
+make cache-up
+```
+
+在 PostgreSQL 模式下启用 Redis：
+
+```bash
+make run-postgres-redis
+```
+
+`GET /products/{productID}` 使用 Cache Aside：缓存未命中时查询 PostgreSQL 并回填；
+不存在的商品使用短 TTL 空值缓存；同一进程内的并发 miss 会合并为一次回源。正常缓存
+TTL 会加入小幅抖动，避免大量 Key 同时失效。商品列表和创建订单仍直接访问事实仓库，
+特别是订单不能使用可能陈旧的缓存价格。
+
+启用 Redis 后，登录与刷新接口的固定窗口限流也由多个应用实例共享。Redis 故障时，
+商品详情仍会降级回源数据库；认证限流则返回 `503 Service Unavailable`，避免静默绕过
+暴力破解保护。`/readyz` 同时检查 Redis，因为启用后的安全限流依赖它。
+
+运行 Redis 集成测试：
+
+```bash
+make test-redis-integration
+```
+
+停止 Redis 但保留数据卷：
+
+```bash
+make cache-down
+```
+
 ## 使用 Kafka/Redpanda 消息链路
 
 Kafka 模式需要持久化 Inbox，因此必须和 PostgreSQL 一起使用。启动完整基础设施、
@@ -79,6 +115,8 @@ make infra-up
 ```bash
 make run-kafka
 ```
+
+要同时启用 Redis，使用 `make run-kafka-redis`。
 
 运行 Kafka 客户端与 Redpanda 的集成测试：
 
@@ -185,6 +223,8 @@ Kafka 模式还会暴露以下消息指标：
 这些指标只使用 Consumer Group、Topic、Partition 和固定结果标签，不使用订单 ID、
 消息 ID 或错误文本，避免产生无法控制的 Prometheus 时间序列。Lag 是当前实例最近一次
 Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失时会删除对应序列。
+商品缓存另有 `order_system_catalog_cache_operations_total`，仅按 `hit`、`negative_hit`、
+`miss`、`read_error` 和 `write_error` 等有限结果聚合，不把商品 ID 放入标签。
 
 ## 使用 Prometheus、Tempo 和 Grafana
 

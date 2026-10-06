@@ -21,6 +21,7 @@ type Registry struct {
 	kafkaDeadLetters        *prometheus.CounterVec
 	kafkaOffsetCommits      *prometheus.CounterVec
 	kafkaConsumerLag        *prometheus.GaugeVec
+	catalogCacheOperations  *prometheus.CounterVec
 }
 
 func NewRegistry() *Registry {
@@ -92,6 +93,14 @@ func NewRegistry() *Registry {
 			},
 			[]string{"consumer_group", "topic", "partition"},
 		),
+		catalogCacheOperations: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "catalog_cache",
+				Name: "operations_total",
+				Help: "Total number of catalog cache operations by bounded outcome.",
+			},
+			[]string{"outcome"},
+		),
 	}
 
 	registry.MustRegister(
@@ -105,8 +114,13 @@ func NewRegistry() *Registry {
 		metrics.kafkaDeadLetters,
 		metrics.kafkaOffsetCommits,
 		metrics.kafkaConsumerLag,
+		metrics.catalogCacheOperations,
 	)
 	return metrics
+}
+
+func (r *Registry) RecordCatalogCacheOperation(outcome string) {
+	r.catalogCacheOperations.WithLabelValues(outcome).Inc()
 }
 
 func (r *Registry) RecordProcessingAttempt(consumerGroup, topic, outcome string) {

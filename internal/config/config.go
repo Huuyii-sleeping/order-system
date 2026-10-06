@@ -14,6 +14,9 @@ const (
 
 	MessageDirect = "direct"
 	MessageKafka  = "kafka"
+
+	CacheNone  = "none"
+	CacheRedis = "redis"
 )
 
 type Config struct {
@@ -25,8 +28,14 @@ type Config struct {
 	ShutdownTimeout  time.Duration
 	ReadinessTimeout time.Duration
 
-	StorageDriver string
-	DatabaseURL   string
+	StorageDriver           string
+	DatabaseURL             string
+	CacheDriver             string
+	RedisURL                string
+	RedisKeyPrefix          string
+	CatalogCacheTTL         time.Duration
+	CatalogNotFoundCacheTTL time.Duration
+	CatalogLoadTimeout      time.Duration
 
 	MessageDriver            string
 	KafkaBrokers             string
@@ -65,6 +74,12 @@ func Load() (Config, error) {
 		ReadinessTimeout:         2 * time.Second,
 		StorageDriver:            strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
 		DatabaseURL:              os.Getenv("DATABASE_URL"),
+		CacheDriver:              strings.ToLower(envOrDefault("CACHE_DRIVER", CacheNone)),
+		RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
+		RedisKeyPrefix:           envOrDefault("REDIS_KEY_PREFIX", "order-system"),
+		CatalogCacheTTL:          5 * time.Minute,
+		CatalogNotFoundCacheTTL:  15 * time.Second,
+		CatalogLoadTimeout:       2 * time.Second,
 		MessageDriver:            strings.ToLower(envOrDefault("MESSAGE_DRIVER", MessageDirect)),
 		KafkaBrokers:             os.Getenv("KAFKA_BROKERS"),
 		KafkaConsumerGroup:       envOrDefault("KAFKA_CONSUMER_GROUP", "order-system-payments-v1"),
@@ -99,6 +114,18 @@ func Load() (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("unsupported STORAGE_DRIVER %q", cfg.StorageDriver)
 	}
+	switch cfg.CacheDriver {
+	case CacheNone:
+	case CacheRedis:
+		if cfg.RedisURL == "" {
+			return Config{}, fmt.Errorf("REDIS_URL is required when CACHE_DRIVER is %q", CacheRedis)
+		}
+		if strings.TrimSpace(cfg.RedisKeyPrefix) == "" {
+			return Config{}, fmt.Errorf("REDIS_KEY_PREFIX is required when CACHE_DRIVER is %q", CacheRedis)
+		}
+	default:
+		return Config{}, fmt.Errorf("unsupported CACHE_DRIVER %q", cfg.CacheDriver)
+	}
 	switch cfg.MessageDriver {
 	case MessageDirect:
 	case MessageKafka:
@@ -126,6 +153,9 @@ func Load() (Config, error) {
 	}{
 		{name: "SHUTDOWN_TIMEOUT", target: &cfg.ShutdownTimeout},
 		{name: "READINESS_TIMEOUT", target: &cfg.ReadinessTimeout},
+		{name: "CATALOG_CACHE_TTL", target: &cfg.CatalogCacheTTL},
+		{name: "CATALOG_NOT_FOUND_CACHE_TTL", target: &cfg.CatalogNotFoundCacheTTL},
+		{name: "CATALOG_LOAD_TIMEOUT", target: &cfg.CatalogLoadTimeout},
 		{name: "ACCESS_TOKEN_TTL", target: &cfg.AccessTokenTTL},
 		{name: "REFRESH_TOKEN_TTL", target: &cfg.RefreshTokenTTL},
 		{name: "AUTH_RATE_WINDOW", target: &cfg.AuthRateWindow},

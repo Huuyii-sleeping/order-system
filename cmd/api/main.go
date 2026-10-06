@@ -52,7 +52,7 @@ func main() {
 	// main 是组合根：根据配置创建内存或 PostgreSQL 适配器，
 	// 再把应用服务注入 HTTP 层。
 	startupContext, cancelStartup := context.WithTimeout(context.Background(), 10*time.Second)
-	services, err := app.NewServices(startupContext, cfg)
+	services, err := app.NewServices(startupContext, cfg, metricRegistry)
 	cancelStartup()
 	if err != nil {
 		logger.Error("initialize services failed", "error", err)
@@ -127,13 +127,9 @@ func main() {
 			PaymentQueries:   services.PaymentQueries,
 			Logger:           logger,
 			AuthSecurity: httpapi.AuthSecurityConfig{
-				SecureCookies: cfg.SecureCookies,
-				LoginLimiter: httpapi.NewFixedWindowRateLimiter(
-					cfg.LoginRateLimit, cfg.AuthRateWindow,
-				),
-				RefreshLimiter: httpapi.NewFixedWindowRateLimiter(
-					cfg.RefreshRateLimit, cfg.AuthRateWindow,
-				),
+				SecureCookies:  cfg.SecureCookies,
+				LoginLimiter:   services.LoginLimiter,
+				RefreshLimiter: services.RefreshLimiter,
 			},
 		},
 	)

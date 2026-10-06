@@ -6,66 +6,17 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"example.com/order-system/internal/platform/ratelimit"
 )
 
-// RequestRateLimiter 是 HTTP 入口依赖的最小限流能力。
-// 接口放在消费方，测试和未来的 Redis 实现都不需要依赖当前内存结构。
-type RequestRateLimiter interface {
-	Allow(key string) (allowed bool, retryAfter time.Duration)
-}
-
-type rateWindow struct {
-	count   int
-	resetAt time.Time
-}
-
-// FixedWindowRateLimiter 是单进程固定窗口限流器。
-// 它适合当前模块化单体；多实例部署需要换成共享存储实现。
-type FixedWindowRateLimiter struct {
-	mu        sync.Mutex
-	limit     int
-	window    time.Duration
-	windows   map[string]rateWindow
-	now       func() time.Time
-	lastSweep time.Time
-}
+// RequestRateLimiter 是 HTTP 入口依赖的最小限流能力。这里导出共享契约的
+// 别名，让路由配置仍然使用传输层语言，而具体实现可以位于其他包。
+type RequestRateLimiter = ratelimit.Limiter
 
 func NewFixedWindowRateLimiter(limit int, window time.Duration) RequestRateLimiter {
-	if limit <= 0 || window <= 0 {
-		return nil
-	}
-	return &FixedWindowRateLimiter{
-		limit: limit, window: window,
-		windows: make(map[string]rateWindow), now: time.Now,
-	}
-}
-
-func (l *FixedWindowRateLimiter) Allow(key string) (bool, time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	now := l.now()
-	if l.lastSweep.IsZero() || !l.lastSweep.Add(l.window).After(now) {
-		for candidate, window := range l.windows {
-			if !window.resetAt.After(now) {
-				delete(l.windows, candidate)
-			}
-		}
-		l.lastSweep = now
-	}
-	window, exists := l.windows[key]
-	if !exists || !window.resetAt.After(now) {
-		l.windows[key] = rateWindow{count: 1, resetAt: now.Add(l.window)}
-		return true, 0
-	}
-	if window.count >= l.limit {
-		return false, window.resetAt.Sub(now)
-	}
-	window.count++
-	l.windows[key] = window
-	return true, 0
+	return ratelimit.NewFixedWindow(limit, window)
 }
 
 // WithRateLimit 在进入认证 Handler 前拦截过量请求。
@@ -74,7 +25,14 @@ func WithRateLimit(limiter RequestRateLimiter, next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		allowed, retryAfter := limiter.Allow(clientAddress(r))
+		allowed, retryAfter, err := limiter.Allow(r.Context(), clientAddress(r))
+		if err != nil {
+			// 认证入口的共享限流器不可用时选择 fail closed。否则 Redis
+			// 故障会悄悄移除暴力破解保护。响应不暴露底层连接信息。
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "service temporarily unavailable")
+			return
+		}
 		if !allowed {
 			seconds := int(math.Ceil(retryAfter.Seconds()))
 			if seconds < 1 {

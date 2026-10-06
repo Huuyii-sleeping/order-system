@@ -2,6 +2,8 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,12 +15,13 @@ import (
 
 type limiterStub struct {
 	allowed bool
+	err     error
 	calls   int
 }
 
-func (s *limiterStub) Allow(string) (bool, time.Duration) {
+func (s *limiterStub) Allow(context.Context, string) (bool, time.Duration, error) {
 	s.calls++
-	return s.allowed, time.Minute
+	return s.allowed, time.Minute, s.err
 }
 
 func TestRateLimiterRejectsExcessRequestsPerClient(t *testing.T) {
@@ -48,6 +51,28 @@ func TestRateLimiterRejectsExcessRequestsPerClient(t *testing.T) {
 	}
 	if called != 2 {
 		t.Errorf("downstream calls = %d, want 2", called)
+	}
+}
+
+func TestRateLimiterFailsClosedWhenSharedStoreIsUnavailable(t *testing.T) {
+	limiter := &limiterStub{allowed: true, err: errors.New("redis unavailable")}
+	called := false
+	handler := httpapi.WithRateLimit(limiter, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	request := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if response.Header().Get("Retry-After") != "1" {
+		t.Errorf("Retry-After = %q, want 1", response.Header().Get("Retry-After"))
+	}
+	if called {
+		t.Fatal("downstream handler was called after limiter failure")
 	}
 }
 

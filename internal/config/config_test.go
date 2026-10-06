@@ -25,6 +25,12 @@ func TestLoad(t *testing.T) {
 		readinessTimeout         string
 		storageDriver            string
 		databaseURL              string
+		cacheDriver              string
+		redisURL                 string
+		redisKeyPrefix           string
+		catalogCacheTTL          string
+		catalogNotFoundCacheTTL  string
+		catalogLoadTimeout       string
 		accessTokenTTL           string
 		refreshTokenTTL          string
 		secureCookies            string
@@ -265,6 +271,37 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name:                    "configures redis cache and shared coordination",
+			cacheDriver:             config.CacheRedis,
+			redisURL:                "redis://127.0.0.1:6379/0",
+			redisKeyPrefix:          "learning",
+			catalogCacheTTL:         "2m",
+			catalogNotFoundCacheTTL: "5s",
+			catalogLoadTimeout:      "750ms",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				ShutdownTimeout: 10 * time.Second, ReadinessTimeout: 2 * time.Second,
+				StorageDriver: config.StorageMemory, CacheDriver: config.CacheRedis,
+				RedisURL: "redis://127.0.0.1:6379/0", RedisKeyPrefix: "learning",
+				CatalogCacheTTL: 2 * time.Minute, CatalogNotFoundCacheTTL: 5 * time.Second,
+				CatalogLoadTimeout: 750 * time.Millisecond,
+				AccessTokenTTL:     15 * time.Minute, RefreshTokenTTL: 30 * 24 * time.Hour,
+				AuthRateWindow: time.Minute, LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second, OutboxRetryMax: time.Minute,
+				PaymentPollInterval: time.Second, PaymentBatchSize: 10,
+				PaymentLeaseDuration: 30 * time.Second, PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
+			},
+		},
+		{
+			name: "redis cache requires URL", cacheDriver: config.CacheRedis,
+			wantErrorContains: "REDIS_URL",
+		},
+		{
+			name: "rejects unsupported cache driver", cacheDriver: "memcached",
+			wantErrorContains: "unsupported CACHE_DRIVER",
+		},
+		{
 			name:              "rejects an invalid shutdown timeout",
 			shutdownTimeout:   "ten-seconds",
 			wantErrorContains: "parse SHUTDOWN_TIMEOUT",
@@ -376,6 +413,12 @@ func TestLoad(t *testing.T) {
 			t.Setenv("READINESS_TIMEOUT", tt.readinessTimeout)
 			t.Setenv("STORAGE_DRIVER", tt.storageDriver)
 			t.Setenv("DATABASE_URL", tt.databaseURL)
+			t.Setenv("CACHE_DRIVER", tt.cacheDriver)
+			t.Setenv("REDIS_URL", tt.redisURL)
+			t.Setenv("REDIS_KEY_PREFIX", tt.redisKeyPrefix)
+			t.Setenv("CATALOG_CACHE_TTL", tt.catalogCacheTTL)
+			t.Setenv("CATALOG_NOT_FOUND_CACHE_TTL", tt.catalogNotFoundCacheTTL)
+			t.Setenv("CATALOG_LOAD_TIMEOUT", tt.catalogLoadTimeout)
 			t.Setenv("ACCESS_TOKEN_TTL", tt.accessTokenTTL)
 			t.Setenv("REFRESH_TOKEN_TTL", tt.refreshTokenTTL)
 			t.Setenv("SECURE_COOKIES", tt.secureCookies)
@@ -426,6 +469,13 @@ func TestLoad(t *testing.T) {
 			}
 
 			want := tt.want
+			if want.CacheDriver == "" {
+				want.CacheDriver = config.CacheNone
+				want.RedisKeyPrefix = "order-system"
+				want.CatalogCacheTTL = 5 * time.Minute
+				want.CatalogNotFoundCacheTTL = 15 * time.Second
+				want.CatalogLoadTimeout = 2 * time.Second
+			}
 			if want.MessageDriver == "" {
 				want.MessageDriver = config.MessageDirect
 				want.KafkaConsumerGroup = "order-system-payments-v1"

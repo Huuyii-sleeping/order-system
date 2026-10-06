@@ -21,6 +21,7 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 	registry.RecordDeadLetter("payments-v1", "orders.created.v1")
 	registry.RecordOffsetCommit("payments-v1", "orders.created.v1", "success")
 	registry.SetConsumerLag("payments-v1", "orders.created.v1", 2, 7)
+	registry.RecordCatalogCacheOperation("hit")
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
@@ -44,6 +45,7 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 		`order_system_kafka_dead_letters_published_total{consumer_group="payments-v1",topic="orders.created.v1"} 1`,
 		`order_system_kafka_offset_commits_total{consumer_group="payments-v1",outcome="success",topic="orders.created.v1"} 1`,
 		`order_system_kafka_consumer_lag_records{consumer_group="payments-v1",partition="2",topic="orders.created.v1"} 7`,
+		`order_system_catalog_cache_operations_total{outcome="hit"} 1`,
 		`go_goroutines`,
 	} {
 		if !strings.Contains(output, want) {

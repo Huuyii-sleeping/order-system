@@ -61,7 +61,7 @@ func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
 	services, err := NewServices(context.Background(), config.Config{
 		StorageDriver:  config.StorageMemory,
 		AccessTokenTTL: time.Minute, RefreshTokenTTL: time.Hour, BcryptCost: 4,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewServices() error = %v", err)
 	}
@@ -88,7 +88,7 @@ func TestMemoryServicesCompletesPaymentSaga(t *testing.T) {
 		StorageDriver: config.StorageMemory, MessageDriver: config.MessageDirect,
 		AccessTokenTTL: time.Minute, RefreshTokenTTL: time.Hour, BcryptCost: 4,
 	}
-	services, err := NewServices(ctx, cfg)
+	services, err := NewServices(ctx, cfg, nil)
 	if err != nil {
 		t.Fatalf("NewServices() error = %v", err)
 	}
