@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"example.com/order-system/internal/application/event"
@@ -20,6 +21,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// TaskStore 的完成与重试方法可能被同一 Worker 的多个 goroutine 并发调用；
+// 适配器必须使用数据库连接池、事务或进程内锁保证并发安全。
 type TaskStore interface {
 	ClaimTasks(context.Context, string, int, time.Time, time.Time) ([]Task, error)
 	CompleteTask(context.Context, string, string, TaskOutcome, time.Time) error
@@ -61,6 +64,7 @@ type TaskOutcome struct {
 type WorkerConfig struct {
 	PollInterval  time.Duration
 	BatchSize     int
+	MaxConcurrent int
 	LeaseDuration time.Duration
 	RetryBase     time.Duration
 	RetryMax      time.Duration
@@ -78,6 +82,7 @@ type Worker struct {
 const (
 	defaultPaymentPollInterval  = time.Second
 	defaultPaymentBatchSize     = 10
+	defaultPaymentMaxConcurrent = 4
 	defaultPaymentLeaseDuration = 30 * time.Second
 	defaultPaymentRetryBase     = time.Second
 	defaultPaymentRetryMax      = time.Minute
@@ -89,6 +94,9 @@ func NewWorker(store TaskStore, provider Provider, logger *slog.Logger, config W
 	}
 	if config.BatchSize <= 0 {
 		config.BatchSize = defaultPaymentBatchSize
+	}
+	if config.MaxConcurrent <= 0 {
+		config.MaxConcurrent = defaultPaymentMaxConcurrent
 	}
 	if config.LeaseDuration <= 0 {
 		config.LeaseDuration = defaultPaymentLeaseDuration
@@ -142,11 +150,34 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("claim payment tasks: %w", err)
 	}
 
-	var batchError error
+	// ClaimTasks 已经把任务所有权保存为租约。这里使用固定数量的 goroutine
+	// 并发处理当前批次，既提高慢网络调用下的吞吐量，又避免“每个任务一个
+	// goroutine”在批次变大时无限放大本机和下游压力。
+	workerCount := min(len(tasks), w.config.MaxConcurrent)
+	taskQueue := make(chan Task)
+	errorQueue := make(chan error, len(tasks))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for task := range taskQueue {
+				if err := w.processTask(ctx, task); err != nil {
+					errorQueue <- err
+				}
+			}
+		}()
+	}
 	for _, task := range tasks {
-		if err := w.processTask(ctx, task); err != nil {
-			batchError = errors.Join(batchError, err)
-		}
+		taskQueue <- task
+	}
+	close(taskQueue)
+	workers.Wait()
+	close(errorQueue)
+
+	var batchError error
+	for taskError := range errorQueue {
+		batchError = errors.Join(batchError, taskError)
 	}
 	return len(tasks), batchError
 }

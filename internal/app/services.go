@@ -51,7 +51,12 @@ type cacheMetrics interface {
 	RecordCatalogCacheOperation(string)
 }
 
-func NewServices(ctx context.Context, cfg config.Config, metrics cacheMetrics) (*Services, error) {
+type serviceMetrics interface {
+	cacheMetrics
+	paymentprovider.ResilienceMetrics
+}
+
+func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics) (*Services, error) {
 	var products catalogapp.Repository
 	var identities authapp.Store
 	var orders interface {
@@ -135,6 +140,18 @@ func NewServices(ctx context.Context, cfg config.Config, metrics cacheMetrics) (
 		paymentStore, idgenerator.Random{}, clock.System{},
 	)
 	paymentResultConsumer := orderapp.NewPaymentResultConsumer(orders, clock.System{})
+	paymentProvider := paymentprovider.NewResilient(
+		paymentprovider.NewSimulatedWithConfig(paymentprovider.SimulatedConfig{
+			Delay: cfg.SimulatedPaymentDelay, Failures: cfg.SimulatedPaymentFailures,
+		}),
+		paymentprovider.ResilienceConfig{
+			Timeout:          cfg.PaymentProviderTimeout,
+			MaxConcurrent:    cfg.PaymentProviderMaxConcurrent,
+			FailureThreshold: cfg.PaymentCircuitFailureThreshold,
+			OpenDuration:     cfg.PaymentCircuitOpenDuration,
+		},
+		metrics,
+	)
 	return &Services{
 		Catalog: catalogapp.NewService(catalogProducts),
 		Auth: authapp.NewService(
@@ -157,7 +174,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics cacheMetrics) (
 		PaymentResults:  paymentResultConsumer,
 		PaymentQueries:  paymentapp.NewQueryService(paymentStore),
 		PaymentTasks:    paymentStore,
-		PaymentProvider: paymentprovider.NewSimulated(),
+		PaymentProvider: paymentProvider,
 		LoginLimiter:    loginLimiter,
 		RefreshLimiter:  refreshLimiter,
 		readiness:       readiness,

@@ -22,6 +22,10 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 	registry.RecordOffsetCommit("payments-v1", "orders.created.v1", "success")
 	registry.SetConsumerLag("payments-v1", "orders.created.v1", 2, 7)
 	registry.RecordCatalogCacheOperation("hit")
+	registry.RecordPaymentProviderCall("success", 25*time.Millisecond)
+	registry.RecordPaymentProviderRejection("circuit_open")
+	registry.SetPaymentProviderCircuitState("open")
+	registry.RecordPaymentProviderCircuitTransition("open")
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
@@ -46,6 +50,11 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 		`order_system_kafka_offset_commits_total{consumer_group="payments-v1",outcome="success",topic="orders.created.v1"} 1`,
 		`order_system_kafka_consumer_lag_records{consumer_group="payments-v1",partition="2",topic="orders.created.v1"} 7`,
 		`order_system_catalog_cache_operations_total{outcome="hit"} 1`,
+		`order_system_payment_provider_requests_total{outcome="success"} 1`,
+		`order_system_payment_provider_request_duration_seconds_count{outcome="success"} 1`,
+		`order_system_payment_provider_rejections_total{reason="circuit_open"} 1`,
+		`order_system_payment_provider_circuit_state{state="open"} 1`,
+		`order_system_payment_provider_circuit_transitions_total{to="open"} 1`,
 		`go_goroutines`,
 	} {
 		if !strings.Contains(output, want) {

@@ -18,41 +18,48 @@ func TestLoad(t *testing.T) {
 
 		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
-		appName                  string
-		httpAddr                 string
-		otlpTraceEndpoint        string
-		shutdownTimeout          string
-		readinessTimeout         string
-		storageDriver            string
-		databaseURL              string
-		cacheDriver              string
-		redisURL                 string
-		redisKeyPrefix           string
-		catalogCacheTTL          string
-		catalogNotFoundCacheTTL  string
-		catalogLoadTimeout       string
-		accessTokenTTL           string
-		refreshTokenTTL          string
-		secureCookies            string
-		authRateWindow           string
-		loginRateLimit           string
-		refreshRateLimit         string
-		outboxPollInterval       string
-		outboxBatchSize          string
-		outboxLeaseDuration      string
-		outboxRetryBase          string
-		outboxRetryMax           string
-		paymentPollInterval      string
-		paymentBatchSize         string
-		paymentLeaseDuration     string
-		paymentRetryBase         string
-		paymentRetryMax          string
-		messageDriver            string
-		kafkaBrokers             string
-		kafkaConsumerGroup       string
-		kafkaDeadLetterTopic     string
-		kafkaConsumerMaxAttempts string
-		kafkaConsumerRetry       string
+		appName                        string
+		httpAddr                       string
+		otlpTraceEndpoint              string
+		shutdownTimeout                string
+		readinessTimeout               string
+		storageDriver                  string
+		databaseURL                    string
+		cacheDriver                    string
+		redisURL                       string
+		redisKeyPrefix                 string
+		catalogCacheTTL                string
+		catalogNotFoundCacheTTL        string
+		catalogLoadTimeout             string
+		accessTokenTTL                 string
+		refreshTokenTTL                string
+		secureCookies                  string
+		authRateWindow                 string
+		loginRateLimit                 string
+		refreshRateLimit               string
+		outboxPollInterval             string
+		outboxBatchSize                string
+		outboxLeaseDuration            string
+		outboxRetryBase                string
+		outboxRetryMax                 string
+		paymentPollInterval            string
+		paymentBatchSize               string
+		paymentWorkerConcurrency       string
+		paymentLeaseDuration           string
+		paymentRetryBase               string
+		paymentRetryMax                string
+		paymentProviderTimeout         string
+		paymentProviderMaxConcurrent   string
+		paymentCircuitFailureThreshold string
+		paymentCircuitOpenDuration     string
+		simulatedPaymentDelay          string
+		simulatedPaymentFailures       string
+		messageDriver                  string
+		kafkaBrokers                   string
+		kafkaConsumerGroup             string
+		kafkaDeadLetterTopic           string
+		kafkaConsumerMaxAttempts       string
+		kafkaConsumerRetry             string
 
 		want              config.Config
 		wantErrorContains string
@@ -209,12 +216,19 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name:                 "environment variables override payment worker",
-			paymentPollInterval:  "300ms",
-			paymentBatchSize:     "4",
-			paymentLeaseDuration: "15s",
-			paymentRetryBase:     "3s",
-			paymentRetryMax:      "45s",
+			name:                           "environment variables override payment worker",
+			paymentPollInterval:            "300ms",
+			paymentBatchSize:               "4",
+			paymentWorkerConcurrency:       "2",
+			paymentLeaseDuration:           "15s",
+			paymentRetryBase:               "3s",
+			paymentRetryMax:                "45s",
+			paymentProviderTimeout:         "750ms",
+			paymentProviderMaxConcurrent:   "3",
+			paymentCircuitFailureThreshold: "7",
+			paymentCircuitOpenDuration:     "20s",
+			simulatedPaymentDelay:          "10ms",
+			simulatedPaymentFailures:       "2",
 			want: config.Config{
 				AppName: "order-system", HTTPAddr: ":8080",
 				ShutdownTimeout: 10 * time.Second, ReadinessTimeout: 2 * time.Second,
@@ -224,8 +238,12 @@ func TestLoad(t *testing.T) {
 				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
 				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second,
 				OutboxRetryMax: time.Minute, PaymentPollInterval: 300 * time.Millisecond,
-				PaymentBatchSize: 4, PaymentLeaseDuration: 15 * time.Second,
-				PaymentRetryBase: 3 * time.Second, PaymentRetryMax: 45 * time.Second,
+				PaymentBatchSize: 4, PaymentWorkerConcurrency: 2,
+				PaymentLeaseDuration: 15 * time.Second, PaymentRetryBase: 3 * time.Second,
+				PaymentRetryMax: 45 * time.Second, PaymentProviderTimeout: 750 * time.Millisecond,
+				PaymentProviderMaxConcurrent: 3, PaymentCircuitFailureThreshold: 7,
+				PaymentCircuitOpenDuration: 20 * time.Second,
+				SimulatedPaymentDelay:      10 * time.Millisecond, SimulatedPaymentFailures: 2,
 			},
 		},
 		{
@@ -363,10 +381,30 @@ func TestLoad(t *testing.T) {
 			wantErrorContains: "PAYMENT_BATCH_SIZE",
 		},
 		{
+			name:                     "rejects zero payment worker concurrency",
+			paymentWorkerConcurrency: "0",
+			wantErrorContains:        "PAYMENT_WORKER_CONCURRENCY",
+		},
+		{
 			name:              "rejects payment retry max below base",
 			paymentRetryBase:  "10s",
 			paymentRetryMax:   "5s",
 			wantErrorContains: "PAYMENT_RETRY_MAX",
+		},
+		{
+			name:                   "rejects provider timeout that can outlive task lease",
+			paymentProviderTimeout: "30s",
+			wantErrorContains:      "payment batch timeout budget",
+		},
+		{
+			name:                     "rejects negative simulated provider failures",
+			simulatedPaymentFailures: "-1",
+			wantErrorContains:        "SIMULATED_PAYMENT_FAILURES",
+		},
+		{
+			name:                         "rejects zero provider concurrency",
+			paymentProviderMaxConcurrent: "0",
+			wantErrorContains:            "PAYMENT_PROVIDER_MAX_CONCURRENT",
 		},
 		{
 			name:              "rejects unsupported message driver",
@@ -432,9 +470,16 @@ func TestLoad(t *testing.T) {
 			t.Setenv("OUTBOX_RETRY_MAX", tt.outboxRetryMax)
 			t.Setenv("PAYMENT_POLL_INTERVAL", tt.paymentPollInterval)
 			t.Setenv("PAYMENT_BATCH_SIZE", tt.paymentBatchSize)
+			t.Setenv("PAYMENT_WORKER_CONCURRENCY", tt.paymentWorkerConcurrency)
 			t.Setenv("PAYMENT_LEASE_DURATION", tt.paymentLeaseDuration)
 			t.Setenv("PAYMENT_RETRY_BASE", tt.paymentRetryBase)
 			t.Setenv("PAYMENT_RETRY_MAX", tt.paymentRetryMax)
+			t.Setenv("PAYMENT_PROVIDER_TIMEOUT", tt.paymentProviderTimeout)
+			t.Setenv("PAYMENT_PROVIDER_MAX_CONCURRENT", tt.paymentProviderMaxConcurrent)
+			t.Setenv("PAYMENT_CIRCUIT_FAILURE_THRESHOLD", tt.paymentCircuitFailureThreshold)
+			t.Setenv("PAYMENT_CIRCUIT_OPEN_DURATION", tt.paymentCircuitOpenDuration)
+			t.Setenv("SIMULATED_PAYMENT_DELAY", tt.simulatedPaymentDelay)
+			t.Setenv("SIMULATED_PAYMENT_FAILURES", tt.simulatedPaymentFailures)
 			t.Setenv("MESSAGE_DRIVER", tt.messageDriver)
 			t.Setenv("KAFKA_BROKERS", tt.kafkaBrokers)
 			t.Setenv("KAFKA_CONSUMER_GROUP", tt.kafkaConsumerGroup)
@@ -488,6 +533,21 @@ func TestLoad(t *testing.T) {
 			}
 			if want.KafkaConsumerRetry == 0 {
 				want.KafkaConsumerRetry = time.Second
+			}
+			if want.PaymentWorkerConcurrency == 0 {
+				want.PaymentWorkerConcurrency = 4
+			}
+			if want.PaymentProviderTimeout == 0 {
+				want.PaymentProviderTimeout = 2 * time.Second
+			}
+			if want.PaymentProviderMaxConcurrent == 0 {
+				want.PaymentProviderMaxConcurrent = 4
+			}
+			if want.PaymentCircuitFailureThreshold == 0 {
+				want.PaymentCircuitFailureThreshold = 5
+			}
+			if want.PaymentCircuitOpenDuration == 0 {
+				want.PaymentCircuitOpenDuration = 30 * time.Second
 			}
 			if got != want {
 				t.Errorf("Load() = %+v, want %+v", got, want)

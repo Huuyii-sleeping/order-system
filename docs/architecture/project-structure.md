@@ -92,9 +92,10 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/adapters/redis/`：提供商品详情 Cache Aside 和跨实例共享的认证固定窗口限流。
 - `internal/adapters/messaging/`：提供进程内和 Kafka 两种消息适配器，负责 Record
   信封、生产确认、消费者组、有限重试、死信隔离和 offset 提交。
-- `internal/adapters/paymentprovider/`：提供带稳定幂等键的模拟第三方支付适配器。
+- `internal/adapters/paymentprovider/`：提供带稳定幂等键的模拟第三方支付适配器，以及
+  不侵入业务 Worker 的超时、并发舱壁和熔断装饰器。
 - `internal/application/outbox/`：提供 Outbox 消息契约、租约认领、重试和 Worker 生命周期。
-- `internal/application/payment/`：提供 Inbox 消费幂等、支付查询、支付任务和第三方调用 Worker。
+- `internal/application/payment/`：提供 Inbox 消费幂等、支付查询、支付任务和有界并发 Worker。
 - `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API，认证中间件将可信用户 ID 写入 Context。
 - `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程、HTTP 请求
   和 Kafka 消费指标。

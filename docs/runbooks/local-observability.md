@@ -79,6 +79,8 @@ curl -fsS http://127.0.0.1:3200/ready
 sum by (route, status) (rate(order_system_http_requests_total[1m]))
 order_system_kafka_consumer_lag_records
 sum by (outcome) (rate(order_system_kafka_processing_attempts_total[5m]))
+sum by (outcome) (rate(order_system_payment_provider_requests_total[5m]))
+order_system_payment_provider_circuit_state
 ```
 
 在 Grafana 的 `Explore` 中选择 `Tempo` 数据源，使用 TraceQL 查询：
@@ -112,6 +114,8 @@ sum by (outcome) (rate(order_system_kafka_processing_attempts_total[5m]))
 5. Trace 在异步阶段断开：检查 Outbox、Payment Task 和 Kafka Header 中的 Trace Context。
 6. 查询有结果但告警未触发：检查表达式、`for` 持续时间和规则评估时间。
 7. 告警已触发但无人收到通知：当前没有 Alertmanager，这是预期边界。
+8. 支付熔断已打开：按 `outcome` 区分超时、依赖错误和非法响应，并参考
+   `payment-provider-resilience.md` 验证冷却后的半开探测。
 
 ## 停止
 

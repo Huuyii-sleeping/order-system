@@ -86,6 +86,7 @@ func main() {
 		logger,
 		paymentapp.WorkerConfig{
 			PollInterval: cfg.PaymentPollInterval, BatchSize: cfg.PaymentBatchSize,
+			MaxConcurrent: cfg.PaymentWorkerConcurrency,
 			LeaseDuration: cfg.PaymentLeaseDuration, RetryBase: cfg.PaymentRetryBase,
 			RetryMax: cfg.PaymentRetryMax,
 		},

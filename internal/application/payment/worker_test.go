@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 )
 
 type taskStoreStub struct {
+	mu          sync.Mutex
 	tasks       []Task
 	completed   TaskOutcome
 	retried     TaskOutcome
@@ -38,6 +42,8 @@ func (s *taskStoreStub) ClaimTasks(
 func (s *taskStoreStub) CompleteTask(
 	_ context.Context, _, _ string, outcome TaskOutcome, _ time.Time,
 ) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.completed = outcome
 	return nil
 }
@@ -45,6 +51,8 @@ func (s *taskStoreStub) CompleteTask(
 func (s *taskStoreStub) RetryTask(
 	_ context.Context, _, _ string, outcome TaskOutcome, nextAttempt time.Time,
 ) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.retried = outcome
 	s.nextAttempt = nextAttempt
 	return nil
@@ -54,6 +62,12 @@ type providerStub struct {
 	result   ChargeResult
 	err      error
 	requests []ChargeRequest
+}
+
+type providerFunc func(context.Context, ChargeRequest) (ChargeResult, error)
+
+func (f providerFunc) Charge(ctx context.Context, request ChargeRequest) (ChargeResult, error) {
+	return f(ctx, request)
 }
 
 func (p *providerStub) Charge(_ context.Context, request ChargeRequest) (ChargeResult, error) {
@@ -141,6 +155,42 @@ func TestWorkerCompletesDeclinedCharge(t *testing.T) {
 	}
 }
 
+func TestWorkerProcessesBatchWithBoundedConcurrency(t *testing.T) {
+	tasks := make([]Task, 0, 6)
+	for index := 1; index <= 6; index++ {
+		tasks = append(tasks, testTaskWithID(t, fmt.Sprintf("%d", index)))
+	}
+	store := &taskStoreStub{tasks: tasks}
+	var active atomic.Int32
+	var maximum atomic.Int32
+	provider := providerFunc(func(
+		context.Context, ChargeRequest,
+	) (ChargeResult, error) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			observed := maximum.Load()
+			if current <= observed || maximum.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		return ChargeResult{Status: ChargeDeclined, Reason: "declined"}, nil
+	})
+	worker := NewWorker(store, provider, nil, WorkerConfig{MaxConcurrent: 2})
+	worker.newID = func() (string, error) { return "lease-1", nil }
+	worker.now = testWorkerClock()
+
+	processed, err := worker.RunOnce(context.Background())
+
+	if err != nil || processed != 6 {
+		t.Fatalf("RunOnce() = %d, %v; want 6, nil", processed, err)
+	}
+	if got := maximum.Load(); got != 2 {
+		t.Fatalf("maximum concurrent calls = %d, want 2", got)
+	}
+}
+
 func sequenceWorkerIDs(values ...string) func() (string, error) {
 	index := 0
 	return func() (string, error) {
@@ -151,13 +201,17 @@ func sequenceWorkerIDs(values ...string) func() (string, error) {
 }
 
 func testTask(t *testing.T) Task {
+	return testTaskWithID(t, "1")
+}
+
+func testTaskWithID(t *testing.T, suffix string) Task {
 	t.Helper()
-	created, err := payment.New("payment-1", "order-1", "customer-1", 12900,
+	created, err := payment.New("payment-"+suffix, "order-"+suffix, "customer-1", 12900,
 		time.Date(2026, 9, 29, 7, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("payment.New() error = %v", err)
 	}
-	task, err := NewTask("task-1", created)
+	task, err := NewTask("task-"+suffix, created)
 	if err != nil {
 		t.Fatalf("NewTask() error = %v", err)
 	}

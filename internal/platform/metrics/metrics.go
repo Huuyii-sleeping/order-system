@@ -22,6 +22,11 @@ type Registry struct {
 	kafkaOffsetCommits      *prometheus.CounterVec
 	kafkaConsumerLag        *prometheus.GaugeVec
 	catalogCacheOperations  *prometheus.CounterVec
+	paymentProviderRequests *prometheus.CounterVec
+	paymentProviderDuration *prometheus.HistogramVec
+	paymentProviderRejected *prometheus.CounterVec
+	paymentCircuitState     *prometheus.GaugeVec
+	paymentCircuitChanges   *prometheus.CounterVec
 }
 
 func NewRegistry() *Registry {
@@ -101,6 +106,47 @@ func NewRegistry() *Registry {
 			},
 			[]string{"outcome"},
 		),
+		paymentProviderRequests: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "payment_provider",
+				Name: "requests_total",
+				Help: "Total number of payment provider calls by bounded outcome.",
+			},
+			[]string{"outcome"},
+		),
+		paymentProviderDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Namespace: "order_system", Subsystem: "payment_provider",
+				Name:    "request_duration_seconds",
+				Help:    "Payment provider call duration in seconds by bounded outcome.",
+				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"outcome"},
+		),
+		paymentProviderRejected: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "payment_provider",
+				Name: "rejections_total",
+				Help: "Total number of payment provider calls rejected before reaching the dependency.",
+			},
+			[]string{"reason"},
+		),
+		paymentCircuitState: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "order_system", Subsystem: "payment_provider",
+				Name: "circuit_state",
+				Help: "Current payment provider circuit state as one-hot gauges.",
+			},
+			[]string{"state"},
+		),
+		paymentCircuitChanges: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "payment_provider",
+				Name: "circuit_transitions_total",
+				Help: "Total number of payment provider circuit state transitions.",
+			},
+			[]string{"to"},
+		),
 	}
 
 	registry.MustRegister(
@@ -115,8 +161,36 @@ func NewRegistry() *Registry {
 		metrics.kafkaOffsetCommits,
 		metrics.kafkaConsumerLag,
 		metrics.catalogCacheOperations,
+		metrics.paymentProviderRequests,
+		metrics.paymentProviderDuration,
+		metrics.paymentProviderRejected,
+		metrics.paymentCircuitState,
+		metrics.paymentCircuitChanges,
 	)
 	return metrics
+}
+
+func (r *Registry) RecordPaymentProviderCall(outcome string, duration time.Duration) {
+	r.paymentProviderRequests.WithLabelValues(outcome).Inc()
+	r.paymentProviderDuration.WithLabelValues(outcome).Observe(duration.Seconds())
+}
+
+func (r *Registry) RecordPaymentProviderRejection(reason string) {
+	r.paymentProviderRejected.WithLabelValues(reason).Inc()
+}
+
+func (r *Registry) SetPaymentProviderCircuitState(state string) {
+	for _, candidate := range []string{"closed", "open", "half_open"} {
+		value := 0.0
+		if candidate == state {
+			value = 1
+		}
+		r.paymentCircuitState.WithLabelValues(candidate).Set(value)
+	}
+}
+
+func (r *Registry) RecordPaymentProviderCircuitTransition(state string) {
+	r.paymentCircuitChanges.WithLabelValues(state).Inc()
 }
 
 func (r *Registry) RecordCatalogCacheOperation(outcome string) {

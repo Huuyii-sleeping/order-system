@@ -89,3 +89,24 @@ groups:
         annotations:
           summary: Order System published a Kafka dead letter
           description: At least one record was isolated to a dead letter topic during the last five minutes.
+
+  - name: order-system-payment-provider
+    rules:
+      - alert: OrderSystemPaymentProviderCircuitOpen
+        expr: order_system_payment_provider_circuit_state{state="open"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Payment provider circuit remains open
+          description: The payment provider circuit has rejected calls for at least two minutes.
+
+      - alert: OrderSystemPaymentProviderFailures
+        expr: |
+          sum(increase(order_system_payment_provider_requests_total{outcome=~"timeout|error|invalid_response"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Payment provider calls are failing
+          description: Payment provider dependency failures have occurred during the last five minutes.

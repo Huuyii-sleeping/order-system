@@ -183,6 +183,12 @@ curl http://127.0.0.1:8080/orders/<order-id>/payment \
 `pending` 变为 `confirmed`；支付明确失败时订单最终变为 `cancelled`，并在同一个
 订单侧事务中释放预占库存。支付结果仍为 `unknown` 时不会取消订单。
 
+Payment Worker 会以固定数量的 goroutine 处理批次；Provider 外层再通过超时、并发舱壁
+和 `closed -> open -> half_open` 熔断状态机隔离不稳定的下游。超时、网络错误、舱壁拒绝
+和熔断拒绝都只表示结果不确定，因此任务会持久化为 `unknown`，随后用原
+`Idempotency-Key` 退避重试；只有 Provider 明确返回业务拒绝时才进入 `failed`。
+默认参数和本地故障演练方式见 `docs/runbooks/payment-provider-resilience.md`。
+
 登出当前设备，或让当前用户的所有设备立即下线：
 
 ```bash
@@ -225,6 +231,8 @@ Kafka 模式还会暴露以下消息指标：
 Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失时会删除对应序列。
 商品缓存另有 `order_system_catalog_cache_operations_total`，仅按 `hit`、`negative_hit`、
 `miss`、`read_error` 和 `write_error` 等有限结果聚合，不把商品 ID 放入标签。
+支付 Provider 指标包括调用次数/耗时、调用前拒绝次数、熔断状态和状态切换次数；
+标签只使用固定的结果、拒绝原因和状态，不包含订单 ID、支付 ID 或错误文本。
 
 ## 使用 Prometheus、Tempo 和 Grafana
 
@@ -258,7 +266,8 @@ make observability-down
 ```
 
 当前规则覆盖抓取失败、HTTP 5xx 比例、HTTP P95 延迟、Kafka Consumer Lag、
-Handler 失败、Offset 提交失败和死信发布。阈值是本地学习基线，生产环境应根据
+Handler 失败、Offset 提交失败、死信发布、支付 Provider 故障和熔断持续打开。
+阈值是本地学习基线，生产环境应根据
 SLO、正常流量和故障预算调整。完整的启动、验证和故障模拟步骤见
 `docs/runbooks/local-observability.md`。
 
