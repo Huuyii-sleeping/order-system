@@ -71,6 +71,17 @@ type Config struct {
 	PaymentCircuitOpenDuration     time.Duration
 	SimulatedPaymentDelay          time.Duration
 	SimulatedPaymentFailures       int
+
+	NotificationPollInterval        time.Duration
+	NotificationBatchSize           int
+	NotificationWorkerConcurrency   int
+	NotificationLeaseDuration       time.Duration
+	NotificationRetryBase           time.Duration
+	NotificationRetryMax            time.Duration
+	NotificationProviderTimeout     time.Duration
+	SimulatedNotificationDelay      time.Duration
+	SimulatedNotificationFailures   int
+	SimulatedNotificationRejections int
 }
 
 func Load() (Config, error) {
@@ -117,6 +128,13 @@ func Load() (Config, error) {
 		PaymentProviderMaxConcurrent:   4,
 		PaymentCircuitFailureThreshold: 5,
 		PaymentCircuitOpenDuration:     30 * time.Second,
+		NotificationPollInterval:       time.Second,
+		NotificationBatchSize:          10,
+		NotificationWorkerConcurrency:  4,
+		NotificationLeaseDuration:      30 * time.Second,
+		NotificationRetryBase:          time.Second,
+		NotificationRetryMax:           time.Minute,
+		NotificationProviderTimeout:    2 * time.Second,
 	}
 
 	switch cfg.StorageDriver {
@@ -184,6 +202,11 @@ func Load() (Config, error) {
 		{name: "PAYMENT_RETRY_MAX", target: &cfg.PaymentRetryMax},
 		{name: "PAYMENT_PROVIDER_TIMEOUT", target: &cfg.PaymentProviderTimeout},
 		{name: "PAYMENT_CIRCUIT_OPEN_DURATION", target: &cfg.PaymentCircuitOpenDuration},
+		{name: "NOTIFICATION_POLL_INTERVAL", target: &cfg.NotificationPollInterval},
+		{name: "NOTIFICATION_LEASE_DURATION", target: &cfg.NotificationLeaseDuration},
+		{name: "NOTIFICATION_RETRY_BASE", target: &cfg.NotificationRetryBase},
+		{name: "NOTIFICATION_RETRY_MAX", target: &cfg.NotificationRetryMax},
+		{name: "NOTIFICATION_PROVIDER_TIMEOUT", target: &cfg.NotificationProviderTimeout},
 		{name: "KAFKA_CONSUMER_RETRY", target: &cfg.KafkaConsumerRetry},
 	} {
 		if err := loadPositiveDuration(setting.name, setting.target); err != nil {
@@ -251,6 +274,37 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.SimulatedPaymentFailures = simulatedPaymentFailures
+	simulatedNotificationDelay, err := loadNonNegativeDuration(
+		"SIMULATED_NOTIFICATION_DELAY", cfg.SimulatedNotificationDelay,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SimulatedNotificationDelay = simulatedNotificationDelay
+	simulatedNotificationFailures, err := loadNonNegativeInt(
+		"SIMULATED_NOTIFICATION_FAILURES", cfg.SimulatedNotificationFailures,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SimulatedNotificationFailures = simulatedNotificationFailures
+	simulatedNotificationRejections, err := loadNonNegativeInt(
+		"SIMULATED_NOTIFICATION_REJECTIONS", cfg.SimulatedNotificationRejections,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SimulatedNotificationRejections = simulatedNotificationRejections
+	notificationBatchSize, err := loadPositiveInt("NOTIFICATION_BATCH_SIZE", cfg.NotificationBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.NotificationBatchSize = notificationBatchSize
+	notificationWorkerConcurrency, err := loadPositiveInt("NOTIFICATION_WORKER_CONCURRENCY", cfg.NotificationWorkerConcurrency)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.NotificationWorkerConcurrency = notificationWorkerConcurrency
 	kafkaConsumerMaxAttempts, err := loadPositiveInt("KAFKA_CONSUMER_MAX_ATTEMPTS", cfg.KafkaConsumerMaxAttempts)
 	if err != nil {
 		return Config{}, err
@@ -265,6 +319,9 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf(
 			"PAYMENT_RETRY_MAX must be greater than or equal to PAYMENT_RETRY_BASE",
 		)
+	}
+	if cfg.NotificationRetryMax < cfg.NotificationRetryBase {
+		return Config{}, fmt.Errorf("NOTIFICATION_RETRY_MAX must be greater than or equal to NOTIFICATION_RETRY_BASE")
 	}
 	if cfg.ShutdownDrainDelay >= cfg.ShutdownTimeout {
 		return Config{}, fmt.Errorf(
@@ -281,6 +338,13 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf(
 			"payment batch timeout budget must be less than PAYMENT_LEASE_DURATION",
 		)
+	}
+	notificationCallRounds := cfg.NotificationBatchSize / cfg.NotificationWorkerConcurrency
+	if cfg.NotificationBatchSize%cfg.NotificationWorkerConcurrency != 0 {
+		notificationCallRounds++
+	}
+	if cfg.NotificationProviderTimeout >= cfg.NotificationLeaseDuration/time.Duration(notificationCallRounds) {
+		return Config{}, fmt.Errorf("notification batch timeout budget must be less than NOTIFICATION_LEASE_DURATION")
 	}
 
 	return cfg, nil

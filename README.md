@@ -108,7 +108,7 @@ make cache-down
 
 Kafka 模式需要持久化 Inbox，因此必须和 PostgreSQL 一起使用。启动完整基础设施、
 执行数据库迁移并创建三分区的 `orders.created.v1`、`payments.succeeded.v1`、
-`payments.failed.v1` Topic、共享的 `orders.created.v1.dlq` 死信 Topic，以及隔离的
+`payments.failed.v1`、`notifications.requested.v1` Topic、共享的 `orders.created.v1.dlq` 死信 Topic，以及隔离的
 集成测试 Topic：
 
 ```bash
@@ -188,6 +188,18 @@ curl http://127.0.0.1:8080/orders/<order-id> \
 curl http://127.0.0.1:8080/orders/<order-id>/payment \
   -H 'Authorization: Bearer <access-token>'
 ```
+
+支付终态还会异步创建通知任务。使用同一个 Bearer Token 查询通知状态：
+
+```bash
+curl http://127.0.0.1:8080/orders/<order-id>/notification \
+  -H 'Authorization: Bearer <access-token>'
+```
+
+通知可能经历 `pending -> processing -> sent`，网络错误或超时会进入 `unknown` 并用同一
+个通知幂等键退避重试，Provider 明确拒绝才进入 `failed`。通知接口只返回安全状态，不暴露
+Provider reference 和原始失败原因。通知任务的故障模拟、数据库排查和指标说明见
+[`docs/runbooks/notification-delivery.md`](docs/runbooks/notification-delivery.md)。
 
 支付可能经历 `pending -> processing -> succeeded`；第三方结果不确定时会进入
 `unknown` 并重试，明确拒绝则进入 `failed`。订单刚创建、事件尚未被消费时，接口会

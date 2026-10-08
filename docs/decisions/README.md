@@ -10,3 +10,7 @@
 - 选择原因
 - 影响和遗留风险
 - 重新评估的条件
+
+当前新增：
+
+- [`0016-notification-delivery.md`](0016-notification-delivery.md)：通知 Outbox、Inbox、Task、Provider 幂等键和最终一致投递。

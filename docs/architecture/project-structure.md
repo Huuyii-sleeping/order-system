@@ -2,8 +2,8 @@
 
 本项目采用模块化单体作为大型项目的起点：先在一个进程内明确模块边界、依赖方向和业务责任，再根据真实的性能与部署需求拆分服务。
 
-当前项目已经实现用户认证、商品查询、事务下单、可靠事件消费、支付任务和支付结果 Saga，
-并提供内存和 PostgreSQL 两种存储适配器。
+当前项目已经实现用户认证、商品查询、事务下单、可靠事件消费、支付任务、支付结果 Saga、
+通知可靠投递，并提供内存和 PostgreSQL 两种存储适配器。
 后续仍按照业务需求逐步扩展，不为了填满目录提前创建无用抽象。
 
 ## 目标结构
@@ -84,11 +84,11 @@ app 负责把 domain、application、adapters、transport 组装起来。
 ## 当前实现状态
 
 - `internal/domain/`：已经包含用户、会话、商品、库存和订单领域模型。
-- `internal/application/`：已经包含注册登录、商品查询、事务下单、可靠事件、支付任务
-  和支付结果驱动的订单确认或库存补偿用例。
+- `internal/application/`：已经包含注册登录、商品查询、事务下单、可靠事件、支付任务、
+  支付结果驱动的订单确认或库存补偿，以及通知 Inbox/Task/Provider 投递用例。
 - `internal/application/event/`：保存生产者与消费者共同依赖的版本化集成事件契约。
 - `internal/adapters/memory/`：提供默认的进程内存实现。
-- `internal/adapters/postgres/`：提供连接池、订单、Outbox、Inbox、支付任务和迁移实现。
+- `internal/adapters/postgres/`：提供连接池、订单、Outbox、Inbox、支付任务、通知任务和迁移实现。
 - `internal/adapters/redis/`：提供商品详情 Cache Aside 和跨实例共享的认证固定窗口限流。
 - `internal/adapters/messaging/`：提供进程内和 Kafka 两种消息适配器，负责 Record
   信封、生产确认、消费者组、有限重试、死信隔离和 offset 提交。
@@ -96,6 +96,7 @@ app 负责把 domain、application、adapters、transport 组装起来。
   不侵入业务 Worker 的超时、并发舱壁和熔断装饰器。
 - `internal/application/outbox/`：提供 Outbox 消息契约、租约认领、重试和 Worker 生命周期。
 - `internal/application/payment/`：提供 Inbox 消费幂等、支付查询、支付任务和有界并发 Worker。
+- `internal/application/notification/`：提供通知事件 Inbox 幂等、通知查询、任务租约、Provider 超时、稳定幂等键和重试 Worker。
 - `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API，认证中间件将可信用户 ID 写入 Context。
 - `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程、HTTP 请求
   和 Kafka 消费指标。

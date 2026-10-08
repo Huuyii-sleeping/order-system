@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"example.com/order-system/internal/app"
+	notificationapp "example.com/order-system/internal/application/notification"
 	outboxapp "example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
@@ -94,7 +95,16 @@ func run(logger *slog.Logger) error {
 			RetryMax: cfg.PaymentRetryMax,
 		},
 	)
-	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+2)
+	notificationWorker := notificationapp.NewWorker(
+		services.NotificationTasks, services.NotificationProvider, logger,
+		notificationapp.WorkerConfig{
+			PollInterval: cfg.NotificationPollInterval, BatchSize: cfg.NotificationBatchSize,
+			MaxConcurrent: cfg.NotificationWorkerConcurrency,
+			LeaseDuration: cfg.NotificationLeaseDuration, RetryBase: cfg.NotificationRetryBase,
+			RetryMax: cfg.NotificationRetryMax, ProviderTimeout: cfg.NotificationProviderTimeout,
+		}, metricRegistry,
+	)
+	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+3)
 	for index, worker := range outboxWorkers {
 		backgroundTasks = append(backgroundTasks, app.BackgroundTask{
 			Name: fmt.Sprintf("outbox-%d", index+1),
@@ -109,6 +119,13 @@ func run(logger *slog.Logger) error {
 			Name: "payment-worker",
 			Run: func(stopCtx, workCtx context.Context) error {
 				paymentWorker.RunGracefully(stopCtx, workCtx)
+				return nil
+			},
+		},
+		app.BackgroundTask{
+			Name: "notification-worker",
+			Run: func(stopCtx, workCtx context.Context) error {
+				notificationWorker.RunGracefully(stopCtx, workCtx)
 				return nil
 			},
 		},
@@ -130,11 +147,12 @@ func run(logger *slog.Logger) error {
 		services.Auth,
 		services.Orders,
 		httpapi.RouterConfig{
-			Readiness:        services,
-			ReadinessTimeout: cfg.ReadinessTimeout,
-			MetricsHandler:   metricRegistry.Handler(),
-			PaymentQueries:   services.PaymentQueries,
-			Logger:           logger,
+			Readiness:           services,
+			ReadinessTimeout:    cfg.ReadinessTimeout,
+			MetricsHandler:      metricRegistry.Handler(),
+			PaymentQueries:      services.PaymentQueries,
+			NotificationQueries: services.NotificationQueries,
+			Logger:              logger,
 			AuthSecurity: httpapi.AuthSecurityConfig{
 				SecureCookies:  cfg.SecureCookies,
 				LoginLimiter:   services.LoginLimiter,

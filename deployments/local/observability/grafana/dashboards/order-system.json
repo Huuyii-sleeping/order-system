@@ -127,6 +127,26 @@
       "targets": [{"editorMode": "code", "expr": "order_system_payment_provider_circuit_state", "legendFormat": "{{state}}", "range": true, "refId": "A"}],
       "title": "Payment circuit state",
       "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34},
+      "id": 12,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"editorMode": "code", "expr": "sum by (outcome) (rate(order_system_notification_tasks_total[5m]))", "legendFormat": "{{outcome}}", "range": true, "refId": "A"}],
+      "title": "Notification task outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
+      "id": 13,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"editorMode": "code", "expr": "sum by (reason) (increase(order_system_notification_retries_total[5m]))", "legendFormat": "{{reason}}", "range": true, "refId": "A"}],
+      "title": "Notification retries in 5m",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",
@@ -138,5 +158,5 @@
   "timezone": "browser",
   "title": "Order System Overview",
   "uid": "order-system-overview",
-  "version": 2
+  "version": 3
 }

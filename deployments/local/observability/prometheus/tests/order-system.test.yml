@@ -182,3 +182,28 @@ tests:
             exp_annotations:
               summary: Payment provider calls are failing
               description: Payment provider dependency failures have occurred during the last five minutes.
+
+  - name: notification-retries-and-unknown-outcomes-alert
+    interval: 1m
+    input_series:
+      - series: 'order_system_notification_retries_total{reason="provider_error"}'
+        values: '0 1 1 1 1 1'
+      - series: 'order_system_notification_tasks_total{outcome="unknown"}'
+        values: '0 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: OrderSystemNotificationRetries
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Order System notification delivery is retrying
+              description: Notification tasks have encountered provider or response errors during the last five minutes.
+      - eval_time: 4m
+        alertname: OrderSystemNotificationUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Order System notification outcomes are unknown
+              description: Notification delivery has encountered uncertain provider outcomes during the last five minutes and requires reconciliation.

@@ -27,6 +27,8 @@ type Registry struct {
 	paymentProviderRejected *prometheus.CounterVec
 	paymentCircuitState     *prometheus.GaugeVec
 	paymentCircuitChanges   *prometheus.CounterVec
+	notificationTasks       *prometheus.CounterVec
+	notificationRetries     *prometheus.CounterVec
 }
 
 func NewRegistry() *Registry {
@@ -147,6 +149,14 @@ func NewRegistry() *Registry {
 			},
 			[]string{"to"},
 		),
+		notificationTasks: prometheus.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "order_system", Subsystem: "notification", Name: "tasks_total", Help: "Total notification task outcomes."},
+			[]string{"outcome"},
+		),
+		notificationRetries: prometheus.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "order_system", Subsystem: "notification", Name: "retries_total", Help: "Total notification task retries by reason."},
+			[]string{"reason"},
+		),
 	}
 
 	registry.MustRegister(
@@ -166,8 +176,18 @@ func NewRegistry() *Registry {
 		metrics.paymentProviderRejected,
 		metrics.paymentCircuitState,
 		metrics.paymentCircuitChanges,
+		metrics.notificationTasks,
+		metrics.notificationRetries,
 	)
 	return metrics
+}
+
+func (r *Registry) RecordNotificationTask(outcome string) {
+	r.notificationTasks.WithLabelValues(outcome).Inc()
+}
+
+func (r *Registry) RecordNotificationRetry(reason string) {
+	r.notificationRetries.WithLabelValues(reason).Inc()
 }
 
 func (r *Registry) RecordPaymentProviderCall(outcome string, duration time.Duration) {

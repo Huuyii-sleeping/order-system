@@ -26,6 +26,8 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 	registry.RecordPaymentProviderRejection("circuit_open")
 	registry.SetPaymentProviderCircuitState("open")
 	registry.RecordPaymentProviderCircuitTransition("open")
+	registry.RecordNotificationTask("sent")
+	registry.RecordNotificationRetry("provider_error")
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
@@ -55,6 +57,8 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 		`order_system_payment_provider_rejections_total{reason="circuit_open"} 1`,
 		`order_system_payment_provider_circuit_state{state="open"} 1`,
 		`order_system_payment_provider_circuit_transitions_total{to="open"} 1`,
+		`order_system_notification_tasks_total{outcome="sent"} 1`,
+		`order_system_notification_retries_total{reason="provider_error"} 1`,
 		`go_goroutines`,
 	} {
 		if !strings.Contains(output, want) {

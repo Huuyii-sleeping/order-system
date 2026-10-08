@@ -110,3 +110,23 @@ groups:
         annotations:
           summary: Payment provider calls are failing
           description: Payment provider dependency failures have occurred during the last five minutes.
+
+  - name: order-system-notification
+    rules:
+      - alert: OrderSystemNotificationRetries
+        expr: sum(increase(order_system_notification_retries_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Order System notification delivery is retrying
+          description: Notification tasks have encountered provider or response errors during the last five minutes.
+
+      - alert: OrderSystemNotificationUnknown
+        expr: sum(increase(order_system_notification_tasks_total{outcome="unknown"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Order System notification outcomes are unknown
+          description: Notification delivery has encountered uncertain provider outcomes during the last five minutes and requires reconciliation.

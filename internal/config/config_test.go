@@ -18,49 +18,59 @@ func TestLoad(t *testing.T) {
 
 		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
-		appName                        string
-		httpAddr                       string
-		otlpTraceEndpoint              string
-		shutdownTimeout                string
-		shutdownDrainDelay             string
-		readinessTimeout               string
-		storageDriver                  string
-		databaseURL                    string
-		cacheDriver                    string
-		redisURL                       string
-		redisKeyPrefix                 string
-		catalogCacheTTL                string
-		catalogNotFoundCacheTTL        string
-		catalogLoadTimeout             string
-		accessTokenTTL                 string
-		refreshTokenTTL                string
-		secureCookies                  string
-		authRateWindow                 string
-		loginRateLimit                 string
-		refreshRateLimit               string
-		outboxPollInterval             string
-		outboxBatchSize                string
-		outboxLeaseDuration            string
-		outboxRetryBase                string
-		outboxRetryMax                 string
-		paymentPollInterval            string
-		paymentBatchSize               string
-		paymentWorkerConcurrency       string
-		paymentLeaseDuration           string
-		paymentRetryBase               string
-		paymentRetryMax                string
-		paymentProviderTimeout         string
-		paymentProviderMaxConcurrent   string
-		paymentCircuitFailureThreshold string
-		paymentCircuitOpenDuration     string
-		simulatedPaymentDelay          string
-		simulatedPaymentFailures       string
-		messageDriver                  string
-		kafkaBrokers                   string
-		kafkaConsumerGroup             string
-		kafkaDeadLetterTopic           string
-		kafkaConsumerMaxAttempts       string
-		kafkaConsumerRetry             string
+		appName                         string
+		httpAddr                        string
+		otlpTraceEndpoint               string
+		shutdownTimeout                 string
+		shutdownDrainDelay              string
+		readinessTimeout                string
+		storageDriver                   string
+		databaseURL                     string
+		cacheDriver                     string
+		redisURL                        string
+		redisKeyPrefix                  string
+		catalogCacheTTL                 string
+		catalogNotFoundCacheTTL         string
+		catalogLoadTimeout              string
+		accessTokenTTL                  string
+		refreshTokenTTL                 string
+		secureCookies                   string
+		authRateWindow                  string
+		loginRateLimit                  string
+		refreshRateLimit                string
+		outboxPollInterval              string
+		outboxBatchSize                 string
+		outboxLeaseDuration             string
+		outboxRetryBase                 string
+		outboxRetryMax                  string
+		paymentPollInterval             string
+		paymentBatchSize                string
+		paymentWorkerConcurrency        string
+		paymentLeaseDuration            string
+		paymentRetryBase                string
+		paymentRetryMax                 string
+		paymentProviderTimeout          string
+		paymentProviderMaxConcurrent    string
+		paymentCircuitFailureThreshold  string
+		paymentCircuitOpenDuration      string
+		simulatedPaymentDelay           string
+		simulatedPaymentFailures        string
+		messageDriver                   string
+		kafkaBrokers                    string
+		kafkaConsumerGroup              string
+		kafkaDeadLetterTopic            string
+		kafkaConsumerMaxAttempts        string
+		kafkaConsumerRetry              string
+		notificationPollInterval        string
+		notificationBatchSize           string
+		notificationWorkerConcurrency   string
+		notificationLeaseDuration       string
+		notificationRetryBase           string
+		notificationRetryMax            string
+		notificationProviderTimeout     string
+		simulatedNotificationDelay      string
+		simulatedNotificationFailures   string
+		simulatedNotificationRejections string
 
 		want              config.Config
 		wantErrorContains string
@@ -511,6 +521,16 @@ func TestLoad(t *testing.T) {
 			t.Setenv("KAFKA_DEAD_LETTER_TOPIC", tt.kafkaDeadLetterTopic)
 			t.Setenv("KAFKA_CONSUMER_MAX_ATTEMPTS", tt.kafkaConsumerMaxAttempts)
 			t.Setenv("KAFKA_CONSUMER_RETRY", tt.kafkaConsumerRetry)
+			t.Setenv("NOTIFICATION_POLL_INTERVAL", tt.notificationPollInterval)
+			t.Setenv("NOTIFICATION_BATCH_SIZE", tt.notificationBatchSize)
+			t.Setenv("NOTIFICATION_WORKER_CONCURRENCY", tt.notificationWorkerConcurrency)
+			t.Setenv("NOTIFICATION_LEASE_DURATION", tt.notificationLeaseDuration)
+			t.Setenv("NOTIFICATION_RETRY_BASE", tt.notificationRetryBase)
+			t.Setenv("NOTIFICATION_RETRY_MAX", tt.notificationRetryMax)
+			t.Setenv("NOTIFICATION_PROVIDER_TIMEOUT", tt.notificationProviderTimeout)
+			t.Setenv("SIMULATED_NOTIFICATION_DELAY", tt.simulatedNotificationDelay)
+			t.Setenv("SIMULATED_NOTIFICATION_FAILURES", tt.simulatedNotificationFailures)
+			t.Setenv("SIMULATED_NOTIFICATION_REJECTIONS", tt.simulatedNotificationRejections)
 
 			got, err := config.Load()
 
@@ -576,6 +596,27 @@ func TestLoad(t *testing.T) {
 			}
 			if want.PaymentCircuitOpenDuration == 0 {
 				want.PaymentCircuitOpenDuration = 30 * time.Second
+			}
+			if want.NotificationPollInterval == 0 {
+				want.NotificationPollInterval = time.Second
+			}
+			if want.NotificationBatchSize == 0 {
+				want.NotificationBatchSize = 10
+			}
+			if want.NotificationWorkerConcurrency == 0 {
+				want.NotificationWorkerConcurrency = 4
+			}
+			if want.NotificationLeaseDuration == 0 {
+				want.NotificationLeaseDuration = 30 * time.Second
+			}
+			if want.NotificationRetryBase == 0 {
+				want.NotificationRetryBase = time.Second
+			}
+			if want.NotificationRetryMax == 0 {
+				want.NotificationRetryMax = time.Minute
+			}
+			if want.NotificationProviderTimeout == 0 {
+				want.NotificationProviderTimeout = 2 * time.Second
 			}
 			if got != want {
 				t.Errorf("Load() = %+v, want %+v", got, want)

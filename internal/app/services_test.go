@@ -6,10 +6,12 @@ import (
 	"testing"
 	"time"
 
+	notificationapp "example.com/order-system/internal/application/notification"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
+	domainnotification "example.com/order-system/internal/domain/notification"
 	"example.com/order-system/internal/domain/order"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -76,8 +78,10 @@ func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = services.Close() })
 	if services.Payments == nil || services.PaymentResults == nil || services.PaymentQueries == nil ||
-		services.PaymentTasks == nil || services.PaymentProvider == nil || len(services.Outboxes) != 2 {
-		t.Fatal("payment flow, both memory outboxes, query service, task store, and provider must be wired")
+		services.PaymentTasks == nil || services.PaymentProvider == nil || services.Notifications == nil ||
+		services.NotificationQueries == nil || services.NotificationTasks == nil ||
+		services.NotificationProvider == nil || len(services.Outboxes) != 2 {
+		t.Fatal("payment and notification flows, query services, task stores, providers, and memory outboxes must be wired")
 	}
 }
 
@@ -131,16 +135,32 @@ func TestMemoryServicesCompletesPaymentSaga(t *testing.T) {
 	if processed, err := paymentOutbox.RunOnce(ctx); err != nil || processed != 1 {
 		t.Fatalf("payment outbox RunOnce() = %d, %v", processed, err)
 	}
+	// 支付结果消费者把通知请求写入订单模块自己的 Outbox；再次运行同一个
+	// Outbox Worker，模拟通知事件被可靠发布并由通知模块消费。
+	if processed, err := orderOutbox.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("notification outbox RunOnce() = %d, %v", processed, err)
+	}
+	notificationWorker := notificationapp.NewWorker(
+		services.NotificationTasks, services.NotificationProvider, nil,
+		notificationapp.WorkerConfig{BatchSize: 10, LeaseDuration: time.Second}, nil,
+	)
+	if processed, err := notificationWorker.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("notification RunOnce() = %d, %v", processed, err)
+	}
 
 	completed, err := services.Orders.GetOrder(ctx, "customer-1", created.Order.ID())
 	if err != nil || completed.Status() != order.StatusConfirmed {
 		t.Fatalf("completed order = %+v, %v; want confirmed", completed, err)
 	}
+	notification, err := services.NotificationQueries.GetNotification(ctx, "customer-1", created.Order.ID())
+	if err != nil || notification.Status() != domainnotification.StatusSent {
+		t.Fatalf("notification = %+v, %v; want sent", notification, err)
+	}
 	rootTraceID := rootSpan.SpanContext().TraceID()
 	rootSpan.End()
 	spans := recorder.Ended()
-	if len(spans) != 6 {
-		t.Fatalf("ended spans = %d, want root plus five asynchronous stages", len(spans))
+	if len(spans) != 9 {
+		t.Fatalf("ended spans = %d, want root plus eight asynchronous stages", len(spans))
 	}
 	for _, span := range spans {
 		if span.SpanContext().TraceID() != rootTraceID {

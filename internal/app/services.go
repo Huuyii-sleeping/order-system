@@ -11,6 +11,7 @@ import (
 	"example.com/order-system/internal/adapters/clock"
 	"example.com/order-system/internal/adapters/idgenerator"
 	"example.com/order-system/internal/adapters/memory"
+	"example.com/order-system/internal/adapters/notificationprovider"
 	"example.com/order-system/internal/adapters/password"
 	"example.com/order-system/internal/adapters/paymentprovider"
 	"example.com/order-system/internal/adapters/postgres"
@@ -18,6 +19,7 @@ import (
 	"example.com/order-system/internal/adapters/sessiontoken"
 	authapp "example.com/order-system/internal/application/auth"
 	catalogapp "example.com/order-system/internal/application/catalog"
+	notificationapp "example.com/order-system/internal/application/notification"
 	orderapp "example.com/order-system/internal/application/order"
 	outboxapp "example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
@@ -28,17 +30,21 @@ import (
 )
 
 type Services struct {
-	Catalog         *catalogapp.Service
-	Auth            *authapp.Service
-	Orders          *orderapp.Service
-	Outboxes        []outboxapp.Store
-	Payments        *paymentapp.Consumer
-	PaymentResults  *orderapp.PaymentResultConsumer
-	PaymentQueries  *paymentapp.QueryService
-	PaymentTasks    paymentapp.TaskStore
-	PaymentProvider paymentapp.Provider
-	LoginLimiter    ratelimit.Limiter
-	RefreshLimiter  ratelimit.Limiter
+	Catalog              *catalogapp.Service
+	Auth                 *authapp.Service
+	Orders               *orderapp.Service
+	Outboxes             []outboxapp.Store
+	Payments             *paymentapp.Consumer
+	PaymentResults       *orderapp.PaymentResultConsumer
+	PaymentQueries       *paymentapp.QueryService
+	PaymentTasks         paymentapp.TaskStore
+	PaymentProvider      paymentapp.Provider
+	Notifications        *notificationapp.Consumer
+	NotificationQueries  *notificationapp.QueryService
+	NotificationTasks    notificationapp.TaskStore
+	NotificationProvider notificationapp.Provider
+	LoginLimiter         ratelimit.Limiter
+	RefreshLimiter       ratelimit.Limiter
 
 	readiness []dependencyPinger
 	closers   []io.Closer
@@ -73,6 +79,11 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		paymentapp.TaskStore
 		paymentapp.QueryStore
 	}
+	var notificationStore interface {
+		notificationapp.Store
+		notificationapp.TaskStore
+		notificationapp.QueryStore
+	}
 	var readiness []dependencyPinger
 	var closers []io.Closer
 
@@ -96,6 +107,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		orders = memoryOrders
 		memoryPayments := memory.NewPaymentStore()
 		paymentStore = memoryPayments
+		notificationStore = memory.NewNotificationStore()
 		outboxStores = []outboxapp.Store{memoryOrders, memoryPayments}
 
 	case config.StoragePostgres:
@@ -110,6 +122,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		orders = postgres.NewOrderStore(db)
 		outboxStores = []outboxapp.Store{postgres.NewOutboxStore(db)}
 		paymentStore = postgres.NewPaymentStore(db)
+		notificationStore = postgres.NewNotificationStore(db)
 
 	default:
 		return nil, fmt.Errorf("unsupported storage driver %q", cfg.StorageDriver)
@@ -156,6 +169,13 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		},
 		metrics,
 	)
+	notificationProvider := notificationprovider.NewSimulatedWithConfig(notificationprovider.Config{
+		Delay: cfg.SimulatedNotificationDelay, Failures: cfg.SimulatedNotificationFailures,
+		Rejections: cfg.SimulatedNotificationRejections,
+	})
+	notificationConsumer := notificationapp.NewConsumer(
+		notificationStore, idgenerator.Random{}, clock.System{},
+	)
 	return &Services{
 		Catalog: catalogapp.NewService(catalogProducts),
 		Auth: authapp.NewService(
@@ -173,16 +193,20 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 			idgenerator.Random{},
 			clock.System{},
 		),
-		Outboxes:        outboxStores,
-		Payments:        paymentConsumer,
-		PaymentResults:  paymentResultConsumer,
-		PaymentQueries:  paymentapp.NewQueryService(paymentStore),
-		PaymentTasks:    paymentStore,
-		PaymentProvider: paymentProvider,
-		LoginLimiter:    loginLimiter,
-		RefreshLimiter:  refreshLimiter,
-		readiness:       readiness,
-		closers:         closers,
+		Outboxes:             outboxStores,
+		Payments:             paymentConsumer,
+		PaymentResults:       paymentResultConsumer,
+		PaymentQueries:       paymentapp.NewQueryService(paymentStore),
+		PaymentTasks:         paymentStore,
+		PaymentProvider:      paymentProvider,
+		Notifications:        notificationConsumer,
+		NotificationQueries:  notificationapp.NewQueryService(notificationStore),
+		NotificationTasks:    notificationStore,
+		NotificationProvider: notificationProvider,
+		LoginLimiter:         loginLimiter,
+		RefreshLimiter:       refreshLimiter,
+		readiness:            readiness,
+		closers:              closers,
 	}, nil
 }
 

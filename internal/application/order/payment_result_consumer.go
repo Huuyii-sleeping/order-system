@@ -30,6 +30,7 @@ type PaymentResultTransaction interface {
 	GetStock(productID string) (inventory.Stock, error)
 	SaveStock(inventory.Stock) error
 	UpdateOrder(order.Order) error
+	SaveOutboxMessage(outbox.Message) error
 }
 
 type PaymentResultStore interface {
@@ -113,6 +114,13 @@ func (c *PaymentResultConsumer) Consume(
 		if err := tx.UpdateOrder(current); err != nil {
 			return fmt.Errorf("update order status: %w", err)
 		}
+		notificationMessage, err := newNotificationMessage(message, resultEvent, current)
+		if err != nil {
+			return fmt.Errorf("create notification event: %w", err)
+		}
+		if err := tx.SaveOutboxMessage(notificationMessage); err != nil {
+			return fmt.Errorf("save notification event: %w", err)
+		}
 		result = PaymentResultConsumeResult{Order: current, Processed: true}
 		return nil
 	})
@@ -120,6 +128,36 @@ func (c *PaymentResultConsumer) Consume(
 		return PaymentResultConsumeResult{}, fmt.Errorf("consume payment result event: %w", err)
 	}
 	return result, nil
+}
+
+func newNotificationMessage(
+	message outbox.Message, result paymentResult, current order.Order,
+) (outbox.Message, error) {
+	eventType := event.NotificationPaymentSucceededV1
+	if result.Topic == event.PaymentFailedV1Topic {
+		eventType = event.NotificationPaymentFailedV1
+	}
+	payload, err := json.Marshal(event.NotificationRequestedV1{
+		// 支付结果消息的 ID 对同一条业务事实是稳定的；使用它构造通知 ID，
+		// 让通知重复投递自然落到同一条 Inbox/Task，而不依赖进程内随机数。
+		NotificationID: "notification-" + message.ID,
+		PaymentID:      result.PaymentID, OrderID: result.OrderID,
+		CustomerID: result.CustomerID, RecipientID: result.CustomerID,
+		EventType: eventType, AmountCents: result.AmountCents,
+		OccurredAt: result.OccurredAt,
+	})
+	if err != nil {
+		return outbox.Message{}, fmt.Errorf("encode notification event: %w", err)
+	}
+	notificationMessage, err := outbox.NewMessage(
+		"notification-event-"+message.ID, event.NotificationRequestedV1Topic,
+		current.ID(), payload, result.OccurredAt,
+	)
+	if err != nil {
+		return outbox.Message{}, err
+	}
+	notificationMessage.TraceContext = message.TraceContext
+	return notificationMessage, nil
 }
 
 type paymentResult struct {

@@ -15,6 +15,7 @@ import (
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/identity"
+	domainnotification "example.com/order-system/internal/domain/notification"
 	"example.com/order-system/internal/domain/order"
 	"example.com/order-system/internal/domain/payment"
 )
@@ -36,6 +37,10 @@ type OrderUseCases interface {
 
 type PaymentQueries interface {
 	GetPayment(context.Context, string, string) (payment.Payment, error)
+}
+
+type NotificationQueries interface {
+	GetNotification(context.Context, string, string) (domainnotification.Notification, error)
 }
 
 type AuthUseCases interface {
@@ -62,12 +67,13 @@ type ReadinessChecker interface {
 }
 
 type RouterConfig struct {
-	AuthSecurity     AuthSecurityConfig
-	Readiness        ReadinessChecker
-	ReadinessTimeout time.Duration
-	MetricsHandler   http.Handler
-	PaymentQueries   PaymentQueries
-	Logger           *slog.Logger
+	AuthSecurity        AuthSecurityConfig
+	Readiness           ReadinessChecker
+	ReadinessTimeout    time.Duration
+	MetricsHandler      http.Handler
+	PaymentQueries      PaymentQueries
+	NotificationQueries NotificationQueries
+	Logger              *slog.Logger
 }
 
 // NewRouter 创建 API 使用的 HTTP 路由。
@@ -139,6 +145,13 @@ func NewRouterWithConfig(
 		mux.Handle(
 			"GET /orders/{orderID}/payment",
 			WithAuthentication(authUseCases, http.HandlerFunc(paymentHandler.getByOrderID)),
+		)
+	}
+	if config.NotificationQueries != nil {
+		notificationHandler := newNotificationHandler(config.NotificationQueries)
+		mux.Handle(
+			"GET /orders/{orderID}/notification",
+			WithAuthentication(authUseCases, http.HandlerFunc(notificationHandler.getByOrderID)),
 		)
 	}
 

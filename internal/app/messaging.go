@@ -30,9 +30,10 @@ func NewMessageRuntime(
 	metrics messaging.KafkaConsumerMetrics,
 ) (*MessageRuntime, error) {
 	handlers := map[string]messaging.MessageHandler{
-		event.OrderCreatedV1Topic:     services.Payments,
-		event.PaymentSucceededV1Topic: services.PaymentResults,
-		event.PaymentFailedV1Topic:    services.PaymentResults,
+		event.OrderCreatedV1Topic:          services.Payments,
+		event.PaymentSucceededV1Topic:      services.PaymentResults,
+		event.PaymentFailedV1Topic:         services.PaymentResults,
+		event.NotificationRequestedV1Topic: services.Notifications,
 	}
 	switch cfg.MessageDriver {
 	case config.MessageDirect:
@@ -56,6 +57,7 @@ func NewMessageRuntime(
 				event.OrderCreatedV1Topic,
 				event.PaymentSucceededV1Topic,
 				event.PaymentFailedV1Topic,
+				event.NotificationRequestedV1Topic,
 			},
 			DeadLetterTopic: cfg.KafkaDeadLetterTopic,
 			MaxAttempts:     cfg.KafkaConsumerMaxAttempts,

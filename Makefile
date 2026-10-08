@@ -32,10 +32,11 @@ cache-down:
 
 broker-up:
 	docker compose up -d --wait redpanda
-	docker compose exec -T redpanda rpk topic create orders.created.v1 --partitions 3 --replicas 1 --if-not-exists
-	docker compose exec -T redpanda rpk topic create payments.succeeded.v1 --partitions 3 --replicas 1 --if-not-exists
-	docker compose exec -T redpanda rpk topic create payments.failed.v1 --partitions 3 --replicas 1 --if-not-exists
-	docker compose exec -T redpanda rpk topic create orders.created.v1.dlq --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create orders.created.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create payments.succeeded.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create payments.failed.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create notifications.requested.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create orders.created.v1.dlq --partitions 3 --replicas 1 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.poison --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.dlq --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
@@ -46,10 +47,11 @@ broker-down:
 infra-up:
 	docker compose up -d --wait postgres redpanda redis
 	$(MAKE) db-migrate
-	docker compose exec -T redpanda rpk topic create orders.created.v1 --partitions 3 --replicas 1 --if-not-exists
-	docker compose exec -T redpanda rpk topic create payments.succeeded.v1 --partitions 3 --replicas 1 --if-not-exists
-	docker compose exec -T redpanda rpk topic create payments.failed.v1 --partitions 3 --replicas 1 --if-not-exists
-	docker compose exec -T redpanda rpk topic create orders.created.v1.dlq --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create orders.created.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create payments.succeeded.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create payments.failed.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create notifications.requested.v1 --partitions 3 --replicas 1 --if-not-exists
+	docker compose exec -T redpanda rpk -X brokers=redpanda:9092 topic create orders.created.v1.dlq --partitions 3 --replicas 1 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.poison --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.dlq --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists

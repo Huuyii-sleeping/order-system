@@ -17,11 +17,13 @@ services:
     profiles: ["application"]
     image: docker.redpanda.com/redpandadata/redpanda:v26.2.3
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      rpk topic create orders.created.v1 --brokers redpanda:9092 --partitions 3 --replicas 1 --if-not-exists
-      rpk topic create payments.succeeded.v1 --brokers redpanda:9092 --partitions 3 --replicas 1 --if-not-exists
-      rpk topic create payments.failed.v1 --brokers redpanda:9092 --partitions 3 --replicas 1 --if-not-exists
-      rpk topic create orders.created.v1.dlq --brokers redpanda:9092 --partitions 3 --replicas 1 --if-not-exists
+    command:
+      - |
+        rpk -X brokers=redpanda:9092 topic create orders.created.v1 --partitions 3 --replicas 1 --if-not-exists
+        rpk -X brokers=redpanda:9092 topic create payments.succeeded.v1 --partitions 3 --replicas 1 --if-not-exists
+        rpk -X brokers=redpanda:9092 topic create payments.failed.v1 --partitions 3 --replicas 1 --if-not-exists
+        rpk -X brokers=redpanda:9092 topic create notifications.requested.v1 --partitions 3 --replicas 1 --if-not-exists
+        rpk -X brokers=redpanda:9092 topic create orders.created.v1.dlq --partitions 3 --replicas 1 --if-not-exists
     depends_on:
       redpanda:
         condition: service_healthy
