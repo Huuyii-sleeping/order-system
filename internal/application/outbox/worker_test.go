@@ -53,6 +53,21 @@ type publisherStub struct {
 	published []Message
 }
 
+type blockingPublisher struct {
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (p *blockingPublisher) Publish(ctx context.Context, _ Message) error {
+	close(p.started)
+	select {
+	case <-p.finish:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (p *publisherStub) Publish(_ context.Context, message Message) error {
 	p.published = append(p.published, message)
 	return p.err
@@ -109,5 +124,37 @@ func TestWorkerRetryDelayIsCapped(t *testing.T) {
 	})
 	if got := worker.retryDelay(20); got != 8*time.Second {
 		t.Errorf("retryDelay(20) = %s, want 8s", got)
+	}
+}
+
+func TestWorkerGracefulStopFinishesClaimedBatch(t *testing.T) {
+	store := &storeStub{messages: []Message{{ID: "message-1", Topic: "orders.created.v1"}}}
+	publisher := &blockingPublisher{started: make(chan struct{}), finish: make(chan struct{})}
+	worker := NewWorker(store, publisher, nil, WorkerConfig{PollInterval: time.Hour})
+	worker.newID = func() (string, error) { return "lease-1", nil }
+	stopCtx, stop := context.WithCancel(context.Background())
+	workCtx, cancelWork := context.WithCancel(context.Background())
+	defer cancelWork()
+	done := make(chan struct{})
+	go func() {
+		worker.RunGracefully(stopCtx, workCtx)
+		close(done)
+	}()
+	<-publisher.started
+
+	stop()
+	select {
+	case <-done:
+		t.Fatal("worker stopped before claimed message finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(publisher.finish)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after claimed message finished")
+	}
+	if store.publishedID != "message-1" {
+		t.Fatalf("published ID = %q, want message-1", store.publishedID)
 	}
 }

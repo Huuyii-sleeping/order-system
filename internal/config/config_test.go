@@ -22,6 +22,7 @@ func TestLoad(t *testing.T) {
 		httpAddr                       string
 		otlpTraceEndpoint              string
 		shutdownTimeout                string
+		shutdownDrainDelay             string
 		readinessTimeout               string
 		storageDriver                  string
 		databaseURL                    string
@@ -73,6 +74,7 @@ func TestLoad(t *testing.T) {
 				AppName:              "order-system",
 				HTTPAddr:             ":8080",
 				ShutdownTimeout:      10 * time.Second,
+				ShutdownDrainDelay:   2 * time.Second,
 				ReadinessTimeout:     2 * time.Second,
 				StorageDriver:        config.StorageMemory,
 				AccessTokenTTL:       15 * time.Minute,
@@ -101,6 +103,7 @@ func TestLoad(t *testing.T) {
 				AppName:              "order-system",
 				HTTPAddr:             ":8080",
 				ShutdownTimeout:      10 * time.Second,
+				ShutdownDrainDelay:   2 * time.Second,
 				ReadinessTimeout:     2 * time.Second,
 				StorageDriver:        config.StorageMemory,
 				AccessTokenTTL:       5 * time.Minute,
@@ -132,6 +135,7 @@ func TestLoad(t *testing.T) {
 				AppName:              "checkout-service",
 				HTTPAddr:             ":9090",
 				ShutdownTimeout:      30 * time.Second,
+				ShutdownDrainDelay:   2 * time.Second,
 				ReadinessTimeout:     2 * time.Second,
 				StorageDriver:        config.StoragePostgres,
 				DatabaseURL:          "postgres://localhost/order_system",
@@ -151,6 +155,22 @@ func TestLoad(t *testing.T) {
 				PaymentLeaseDuration: 30 * time.Second,
 				PaymentRetryBase:     time.Second,
 				PaymentRetryMax:      time.Minute,
+			},
+		},
+		{
+			name:               "environment variables override shutdown drain delay",
+			shutdownTimeout:    "30s",
+			shutdownDrainDelay: "5s",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				ShutdownTimeout: 30 * time.Second, ShutdownDrainDelay: 5 * time.Second,
+				ReadinessTimeout: 2 * time.Second, StorageDriver: config.StorageMemory,
+				AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 30 * 24 * time.Hour,
+				AuthRateWindow: time.Minute, LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second, OutboxRetryMax: time.Minute,
+				PaymentPollInterval: time.Second, PaymentBatchSize: 10, PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
 			},
 		},
 		{
@@ -340,6 +360,10 @@ func TestLoad(t *testing.T) {
 			wantErrorContains: "READINESS_TIMEOUT",
 		},
 		{
+			name: "rejects drain delay equal to shutdown timeout", shutdownDrainDelay: "10s",
+			wantErrorContains: "SHUTDOWN_DRAIN_DELAY must be less than SHUTDOWN_TIMEOUT",
+		},
+		{
 			name:              "rejects unsupported storage driver",
 			storageDriver:     "mongodb",
 			wantErrorContains: "unsupported STORAGE_DRIVER",
@@ -448,6 +472,7 @@ func TestLoad(t *testing.T) {
 			t.Setenv("HTTP_ADDR", tt.httpAddr)
 			t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", tt.otlpTraceEndpoint)
 			t.Setenv("SHUTDOWN_TIMEOUT", tt.shutdownTimeout)
+			t.Setenv("SHUTDOWN_DRAIN_DELAY", tt.shutdownDrainDelay)
 			t.Setenv("READINESS_TIMEOUT", tt.readinessTimeout)
 			t.Setenv("STORAGE_DRIVER", tt.storageDriver)
 			t.Setenv("DATABASE_URL", tt.databaseURL)
@@ -514,6 +539,9 @@ func TestLoad(t *testing.T) {
 			}
 
 			want := tt.want
+			if want.ShutdownDrainDelay == 0 {
+				want.ShutdownDrainDelay = 2 * time.Second
+			}
 			if want.CacheDriver == "" {
 				want.CacheDriver = config.CacheNone
 				want.RedisKeyPrefix = "order-system"

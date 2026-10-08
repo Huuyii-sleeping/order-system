@@ -9,6 +9,10 @@ import (
 
 const defaultReadinessTimeout = 2 * time.Second
 
+type drainState interface {
+	IsDraining() bool
+}
+
 func newReadinessHandler(
 	checker ReadinessChecker,
 	timeout time.Duration,
@@ -20,6 +24,14 @@ func newReadinessHandler(
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		// 排水是一次预期的生命周期转换，不是依赖故障。直接返回 503，
+		// 避免继续 Ping 依赖，也避免每次健康探测都产生错误日志。
+		if state, ok := checker.(drainState); ok && state.IsDraining() {
+			_ = writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status": "unavailable",
+			})
+			return
+		}
 		if checker == nil {
 			_ = writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 			return

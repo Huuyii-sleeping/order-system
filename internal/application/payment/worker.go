@@ -111,15 +111,25 @@ func NewWorker(store TaskStore, provider Provider, logger *slog.Logger, config W
 }
 
 func (w *Worker) Run(ctx context.Context) {
+	w.RunGracefully(ctx, ctx)
+}
+
+// RunGracefully 把停止认领和取消在途操作分开。滚动发布时先取消 stopCtx，
+// 当前已经持有租约的批次仍可使用 workCtx 完成；关闭预算耗尽后再取消
+// workCtx，让数据库和 Provider 调用尽快退出。
+func (w *Worker) RunGracefully(stopCtx, workCtx context.Context) {
 	if w == nil || w.store == nil || w.provider == nil {
 		return
 	}
 	for {
-		processed, err := w.RunOnce(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) && w.logger != nil {
-			w.logger.ErrorContext(ctx, "payment task batch failed", "error", err)
+		if stopCtx.Err() != nil || workCtx.Err() != nil {
+			return
 		}
-		if ctx.Err() != nil {
+		processed, err := w.RunOnce(workCtx)
+		if err != nil && !errors.Is(err, context.Canceled) && w.logger != nil {
+			w.logger.ErrorContext(workCtx, "payment task batch failed", "error", err)
+		}
+		if stopCtx.Err() != nil || workCtx.Err() != nil {
 			return
 		}
 		if processed == w.config.BatchSize {
@@ -127,7 +137,12 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 		timer := time.NewTimer(w.config.PollInterval)
 		select {
-		case <-ctx.Done():
+		case <-stopCtx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-workCtx.Done():
 			if !timer.Stop() {
 				<-timer.C
 			}
@@ -168,8 +183,13 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 			}
 		}()
 	}
+enqueue:
 	for _, task := range tasks {
-		taskQueue <- task
+		select {
+		case taskQueue <- task:
+		case <-ctx.Done():
+			break enqueue
+		}
 	}
 	close(taskQueue)
 	workers.Wait()

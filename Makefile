@@ -1,4 +1,4 @@
-.PHONY: fmt test race vet check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
+.PHONY: fmt test race vet check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
 
 DATABASE_URL ?= postgres://order_system:order_system@127.0.0.1:5432/order_system?sslmode=disable
 REDIS_URL ?= redis://127.0.0.1:6379/0
@@ -56,6 +56,12 @@ infra-up:
 
 infra-down:
 	docker compose down
+
+app-up:
+	docker compose --profile application up -d --build --wait api
+
+app-down:
+	docker compose --profile application stop api
 
 observability-check:
 	docker compose run --rm --no-deps --entrypoint /bin/promtool prometheus check config /etc/prometheus/prometheus.yml

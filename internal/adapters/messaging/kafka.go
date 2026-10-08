@@ -226,13 +226,23 @@ func deleteConsumerLagMetrics(
 }
 
 func (c *KafkaConsumer) Run(ctx context.Context) error {
+	return c.RunGracefully(ctx, ctx)
+}
+
+// RunGracefully 在 stopCtx 取消后不再 Poll 新消息，但允许已经进入 Handler 的
+// 记录继续使用 workCtx 完成业务事务和 offset 提交。关闭预算耗尽时取消
+// workCtx，才会中断在途处理并把消息留给下一次至少一次投递。
+func (c *KafkaConsumer) RunGracefully(stopCtx, workCtx context.Context) error {
 	if c == nil || c.client == nil {
 		return errors.New("kafka consumer is not initialized")
 	}
 	for {
+		if stopCtx.Err() != nil || workCtx.Err() != nil {
+			return nil
+		}
 		// 一次只取一条，确保分区内严格按 offset 顺序完成业务和提交。
-		fetches := c.client.PollRecords(ctx, 1)
-		if ctx.Err() != nil {
+		fetches := c.client.PollRecords(stopCtx, 1)
+		if stopCtx.Err() != nil {
 			c.client.AllowRebalance()
 			return nil
 		}
@@ -240,8 +250,8 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 		if len(records) == 0 {
 			c.client.AllowRebalance()
 			if err := fetches.Err(); err != nil {
-				c.logError(ctx, "kafka fetch failed", err, nil)
-				if !waitForRetry(ctx, c.retryInterval) {
+				c.logError(workCtx, "kafka fetch failed", err, nil)
+				if !waitForRetry(stopCtx, c.retryInterval) {
 					return nil
 				}
 			}
@@ -251,8 +261,8 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 		record := records[0]
 		highWatermark := fetchHighWatermark(fetches, record)
 		c.setConsumerLag(record, highWatermark, false)
-		handlerErr, attempts := c.handleRecordWithRetry(ctx, record)
-		if ctx.Err() != nil {
+		handlerErr, attempts := c.handleRecordWithRetry(workCtx, record)
+		if workCtx.Err() != nil {
 			c.client.AllowRebalance()
 			return nil
 		}
@@ -261,16 +271,16 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 		if handlerErr != nil {
 			// 达到有限重试次数后，把原始记录和失败上下文写入 DLQ。只有
 			// Broker 确认 DLQ 写入成功，才允许提交原消息 offset。
-			err = c.publishDeadLetter(ctx, record, attempts, handlerErr)
+			err = c.publishDeadLetter(workCtx, record, attempts, handlerErr)
 			if err == nil {
 				c.recordDeadLetter(record)
-				c.logDeadLetter(ctx, record, attempts, handlerErr)
+				c.logDeadLetter(workCtx, record, attempts, handlerErr)
 			} else {
 				c.recordRetry(record, "dead_letter_publish")
 			}
 		}
 		if err == nil {
-			err = c.client.CommitRecords(ctx, record)
+			err = c.client.CommitRecords(workCtx, record)
 			if err != nil {
 				c.recordOffsetCommit(record, "failure")
 				c.recordRetry(record, "offset_commit")
@@ -288,10 +298,13 @@ func (c *KafkaConsumer) Run(ctx context.Context) error {
 					record.Partition: kgo.NewOffset().At(record.Offset).WithEpoch(record.LeaderEpoch).EpochOffset(),
 				},
 			})
-			c.logError(ctx, "kafka record processing failed", err, record)
+			c.logError(workCtx, "kafka record processing failed", err, record)
 		}
 		c.client.AllowRebalance()
-		if err != nil && !waitForRetry(ctx, c.retryInterval) {
+		if stopCtx.Err() != nil || workCtx.Err() != nil {
+			return nil
+		}
+		if err != nil && !waitForRetry(stopCtx, c.retryInterval) {
 			return nil
 		}
 	}

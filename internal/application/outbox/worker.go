@@ -64,18 +64,28 @@ func NewWorker(
 	}
 }
 
-// Run 持续处理消息。取消 Context 后停止，不创建无法回收的后台 goroutine。
+// Run 保留单 Context 调用方式：取消时既停止领取新批次，也取消当前批次。
 func (w *Worker) Run(ctx context.Context) {
+	w.RunGracefully(ctx, ctx)
+}
+
+// RunGracefully 使用两个 Context 区分“停止领取新任务”和“强制取消在途任务”。
+// stopCtx 取消后，当前已经认领的批次仍使用 workCtx 完成；只有 workCtx 也被取消时，
+// 才中断正在进行的数据库或 Broker 操作。
+func (w *Worker) RunGracefully(stopCtx, workCtx context.Context) {
 	if w == nil || w.store == nil || w.publisher == nil {
 		return
 	}
 
 	for {
-		processed, err := w.RunOnce(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) && w.logger != nil {
-			w.logger.ErrorContext(ctx, "outbox batch failed", "error", err)
+		if stopCtx.Err() != nil || workCtx.Err() != nil {
+			return
 		}
-		if ctx.Err() != nil {
+		processed, err := w.RunOnce(workCtx)
+		if err != nil && !errors.Is(err, context.Canceled) && w.logger != nil {
+			w.logger.ErrorContext(workCtx, "outbox batch failed", "error", err)
+		}
+		if stopCtx.Err() != nil || workCtx.Err() != nil {
 			return
 		}
 		if processed == w.config.BatchSize {
@@ -84,7 +94,12 @@ func (w *Worker) Run(ctx context.Context) {
 
 		timer := time.NewTimer(w.config.PollInterval)
 		select {
-		case <-ctx.Done():
+		case <-stopCtx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-workCtx.Done():
 			if !timer.Stop() {
 				<-timer.C
 			}
@@ -110,6 +125,9 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 
 	var batchError error
 	for _, message := range messages {
+		if err := ctx.Err(); err != nil {
+			return len(messages), errors.Join(batchError, err)
+		}
 		messageContext := telemetry.Restore(ctx, message.TraceContext)
 		messageContext, span := telemetry.Tracer("order-system/outbox").Start(
 			messageContext, "outbox dispatch",

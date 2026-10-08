@@ -137,6 +137,21 @@ func (h *retryingHandler) Handle(_ context.Context, _ outbox.Message) error {
 	return nil
 }
 
+type blockingMessageHandler struct {
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (h *blockingMessageHandler) Handle(ctx context.Context, _ outbox.Message) error {
+	close(h.started)
+	select {
+	case <-h.finish:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 type kafkaMetricsStub struct {
 	processing  map[string]int
 	retries     map[string]int
@@ -198,8 +213,8 @@ func TestKafkaConsumerCommitsOnlyAfterHandlerSucceeds(t *testing.T) {
 	if handler.calls != 2 || client.commitCount != 1 {
 		t.Fatalf("handler calls = %d, commits = %d; want 2 and 1", handler.calls, client.commitCount)
 	}
-	if client.resetCount != 0 || client.allowCount != 2 {
-		t.Fatalf("offset resets = %d, rebalance allows = %d; want 0 and 2", client.resetCount, client.allowCount)
+	if client.resetCount != 0 || client.allowCount != 1 {
+		t.Fatalf("offset resets = %d, rebalance allows = %d; want 0 and 1", client.resetCount, client.allowCount)
 	}
 	if metrics.processing["failure"] != 1 || metrics.processing["success"] != 1 ||
 		metrics.retries["handler"] != 1 || metrics.commits["success"] != 1 {
@@ -207,6 +222,49 @@ func TestKafkaConsumerCommitsOnlyAfterHandlerSucceeds(t *testing.T) {
 	}
 	if len(metrics.lags) != 2 || metrics.lags[0] != 8 || metrics.lags[1] != 7 {
 		t.Fatalf("lag observations = %v, want [8 7]", metrics.lags)
+	}
+}
+
+func TestKafkaConsumerGracefulStopCommitsInFlightRecord(t *testing.T) {
+	message, _ := outbox.NewMessage(
+		"message-1", "orders.created.v1", "order-1", []byte(`{"ok":true}`), time.Now(),
+	)
+	record, _ := recordFromMessage(message)
+	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{
+		Topic: record.Topic, Partitions: []kgo.FetchPartition{{HighWatermark: 1, Records: []*kgo.Record{record}}},
+	}}}}
+	client := &consumerClientStub{fetches: []kgo.Fetches{fetches}}
+	handler := &blockingMessageHandler{started: make(chan struct{}), finish: make(chan struct{})}
+	consumer := &KafkaConsumer{
+		client: client, retryInterval: time.Millisecond, maxAttempts: 1,
+		deadLetterTopic: "orders.created.v1.dlq", groupID: "payments",
+		handlers: map[string]MessageHandler{message.Topic: handler},
+	}
+	stopCtx, stop := context.WithCancel(context.Background())
+	workCtx, cancelWork := context.WithCancel(context.Background())
+	defer cancelWork()
+	done := make(chan error, 1)
+	go func() { done <- consumer.RunGracefully(stopCtx, workCtx) }()
+	<-handler.started
+
+	stop()
+	select {
+	case <-done:
+		t.Fatal("consumer stopped before in-flight handler finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(handler.finish)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunGracefully() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("consumer did not stop after in-flight handler finished")
+	}
+	if client.commitCount != 1 || client.allowCount != 1 {
+		t.Fatalf("commits = %d, rebalance allows = %d; want 1 and 1",
+			client.commitCount, client.allowCount)
 	}
 }
 

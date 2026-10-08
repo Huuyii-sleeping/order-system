@@ -51,6 +51,15 @@ func TestServicesReadiness(t *testing.T) {
 			t.Fatalf("CheckReadiness() error = %v, want wrapped %v", err, wantErr)
 		}
 	})
+
+	t.Run("reports draining before checking dependencies", func(t *testing.T) {
+		services := &Services{readiness: []dependencyPinger{dependencyPingerStub{}}}
+		services.BeginDrain()
+
+		if err := services.CheckReadiness(context.Background()); !errors.Is(err, ErrDraining) {
+			t.Fatalf("CheckReadiness() error = %v, want %v", err, ErrDraining)
+		}
+	})
 }
 
 type pingContextAdapter struct{ err error }

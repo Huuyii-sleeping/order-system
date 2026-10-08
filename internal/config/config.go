@@ -25,8 +25,9 @@ type Config struct {
 	HTTPAddr          string
 	OTLPTraceEndpoint string
 
-	ShutdownTimeout  time.Duration
-	ReadinessTimeout time.Duration
+	ShutdownTimeout    time.Duration
+	ShutdownDrainDelay time.Duration
+	ReadinessTimeout   time.Duration
 
 	StorageDriver           string
 	DatabaseURL             string
@@ -78,6 +79,7 @@ func Load() (Config, error) {
 		HTTPAddr:                       envOrDefault("HTTP_ADDR", ":8080"),
 		OTLPTraceEndpoint:              strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")),
 		ShutdownTimeout:                10 * time.Second,
+		ShutdownDrainDelay:             2 * time.Second,
 		ReadinessTimeout:               2 * time.Second,
 		StorageDriver:                  strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
 		DatabaseURL:                    os.Getenv("DATABASE_URL"),
@@ -164,6 +166,7 @@ func Load() (Config, error) {
 		target *time.Duration
 	}{
 		{name: "SHUTDOWN_TIMEOUT", target: &cfg.ShutdownTimeout},
+		{name: "SHUTDOWN_DRAIN_DELAY", target: &cfg.ShutdownDrainDelay},
 		{name: "READINESS_TIMEOUT", target: &cfg.ReadinessTimeout},
 		{name: "CATALOG_CACHE_TTL", target: &cfg.CatalogCacheTTL},
 		{name: "CATALOG_NOT_FOUND_CACHE_TTL", target: &cfg.CatalogNotFoundCacheTTL},
@@ -261,6 +264,11 @@ func Load() (Config, error) {
 	if cfg.PaymentRetryMax < cfg.PaymentRetryBase {
 		return Config{}, fmt.Errorf(
 			"PAYMENT_RETRY_MAX must be greater than or equal to PAYMENT_RETRY_BASE",
+		)
+	}
+	if cfg.ShutdownDrainDelay >= cfg.ShutdownTimeout {
+		return Config{}, fmt.Errorf(
+			"SHUTDOWN_DRAIN_DELAY must be less than SHUTDOWN_TIMEOUT",
 		)
 	}
 	providerCallRounds := cfg.PaymentBatchSize / cfg.PaymentWorkerConcurrency

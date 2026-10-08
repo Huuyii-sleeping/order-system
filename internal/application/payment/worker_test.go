@@ -191,6 +191,49 @@ func TestWorkerProcessesBatchWithBoundedConcurrency(t *testing.T) {
 	}
 }
 
+func TestWorkerGracefulStopFinishesClaimedPayment(t *testing.T) {
+	store := &taskStoreStub{tasks: []Task{testTask(t)}}
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	provider := providerFunc(func(ctx context.Context, _ ChargeRequest) (ChargeResult, error) {
+		close(started)
+		select {
+		case <-finish:
+			return ChargeResult{Status: ChargeSucceeded, ProviderReference: "provider-1"}, nil
+		case <-ctx.Done():
+			return ChargeResult{}, ctx.Err()
+		}
+	})
+	worker := NewWorker(store, provider, nil, WorkerConfig{PollInterval: time.Hour})
+	worker.newID = sequenceWorkerIDs("lease-1", "event-1")
+	worker.now = testWorkerClock()
+	stopCtx, stop := context.WithCancel(context.Background())
+	workCtx, cancelWork := context.WithCancel(context.Background())
+	defer cancelWork()
+	done := make(chan struct{})
+	go func() {
+		worker.RunGracefully(stopCtx, workCtx)
+		close(done)
+	}()
+	<-started
+
+	stop()
+	select {
+	case <-done:
+		t.Fatal("worker stopped before claimed payment finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(finish)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after claimed payment finished")
+	}
+	if store.completed.Payment.Status() != payment.StatusSucceeded {
+		t.Fatalf("payment status = %q, want succeeded", store.completed.Payment.Status())
+	}
+}
+
 func sequenceWorkerIDs(values ...string) func() (string, error) {
 	index := 0
 	return func() (string, error) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"example.com/order-system/internal/adapters/clock"
 	"example.com/order-system/internal/adapters/idgenerator"
@@ -41,7 +42,10 @@ type Services struct {
 
 	readiness []dependencyPinger
 	closers   []io.Closer
+	draining  atomic.Bool
 }
+
+var ErrDraining = errors.New("service is draining")
 
 type dependencyPinger interface {
 	PingContext(context.Context) error
@@ -195,12 +199,27 @@ func (s *Services) AddReadinessDependency(dependency interface {
 // CheckReadiness 检查当前实例处理业务请求所依赖的外部资源。
 // 内存模式没有外部依赖，因此直接就绪；PostgreSQL 模式会实际 Ping 连接池。
 func (s *Services) CheckReadiness(ctx context.Context) error {
+	if s != nil && s.draining.Load() {
+		return ErrDraining
+	}
 	for _, dependency := range s.readiness {
 		if err := dependency.PingContext(ctx); err != nil {
 			return fmt.Errorf("check dependency readiness: %w", err)
 		}
 	}
 	return nil
+}
+
+// BeginDrain 让 readiness 立即失败，使负载均衡器在进程真正关闭前先摘除实例。
+// liveness 不受影响，因为进程仍在正常完成已经接收的工作。
+func (s *Services) BeginDrain() {
+	if s != nil {
+		s.draining.Store(true)
+	}
+}
+
+func (s *Services) IsDraining() bool {
+	return s != nil && s.draining.Load()
 }
 
 func (s *Services) Close() error {

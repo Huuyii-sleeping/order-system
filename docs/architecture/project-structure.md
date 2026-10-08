@@ -105,6 +105,8 @@ app 负责把 domain、application、adapters、transport 组装起来。
   Tempo Trace 存储、Grafana 自动配置；观测后端不参与业务事务。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。
 - `internal/app/`：根据配置选择存储适配器并完成依赖组装。
+- `internal/app/background.go`：统一监管后台组件，并把停止领取与取消在途工作拆成两阶段。
+- `cmd/api`：编排信号、readiness 排水、HTTP Shutdown、后台任务等待和资源逆序释放。
 
 后续会在部署等真实需求出现时继续填充目录。
 

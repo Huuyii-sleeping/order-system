@@ -23,6 +23,11 @@ go run ./cmd/api
 - `GET /readyz`：readiness，检查当前实例依赖的存储是否可用。
 - `GET /metrics`：Prometheus 文本格式的进程、HTTP 与消息指标。
 
+收到 `SIGINT` 或 `SIGTERM` 后，实例会先让 `/readyz` 返回 `503`，等待负载均衡器摘流，
+再停止 HTTP 和后台 Worker。已经进入 Handler 或已经取得租约的工作会在总关闭预算内继续
+完成；预算耗尽后才取消在途 Context。配置与演练见
+`docs/runbooks/graceful-shutdown.md`。
+
 配置 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 后，应用还会通过 OTLP/HTTP 导出
 OpenTelemetry Trace；默认不采样、不导出。
 
@@ -129,6 +134,17 @@ make test-kafka-integration
 ```bash
 make infra-down
 ```
+
+也可以把迁移程序和 API 一起构建为非 root 容器，并等待所有依赖与 readiness 就绪：
+
+```bash
+make app-up
+curl http://127.0.0.1:8080/readyz
+make app-down
+```
+
+`api` 容器的终止宽限期为 20 秒，覆盖应用默认 10 秒排水预算，并为 Trace 刷新和资源
+关闭保留余量。Dockerfile 使用多阶段构建，最终镜像不包含 Go 工具链。
 
 Redpanda 对外只监听 `127.0.0.1:19092`。它实现 Kafka 协议，用于本地开发时
 减少运行成本；应用通过标准 Kafka 客户端接入，不依赖 Redpanda 专有 API。

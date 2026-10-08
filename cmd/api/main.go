@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,15 +22,20 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if err := run(logger); err != nil {
+		logger.Error("application stopped", "error", err)
+		os.Exit(1)
+	}
+}
 
+func run(logger *slog.Logger) error {
 	// 配置必须在服务启动前加载并校验。
 	//
 	// 如果配置不合法，服务不应该继续监听端口，
 	// 否则可能出现“服务看起来启动了，但行为不正确”的情况。
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("load config failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load config: %w", err)
 	}
 	telemetryStartupContext, cancelTelemetryStartup := context.WithTimeout(context.Background(), 10*time.Second)
 	tracerProvider, err := telemetry.NewProvider(telemetryStartupContext, telemetry.Config{
@@ -37,8 +43,7 @@ func main() {
 	})
 	cancelTelemetryStartup()
 	if err != nil {
-		logger.Error("initialize telemetry failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize telemetry: %w", err)
 	}
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -55,8 +60,7 @@ func main() {
 	services, err := app.NewServices(startupContext, cfg, metricRegistry)
 	cancelStartup()
 	if err != nil {
-		logger.Error("initialize services failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize services: %w", err)
 	}
 	defer services.Close()
 	messagingStartupContext, cancelMessagingStartup := context.WithTimeout(context.Background(), 10*time.Second)
@@ -65,8 +69,7 @@ func main() {
 	)
 	cancelMessagingStartup()
 	if err != nil {
-		logger.Error("initialize messaging failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize messaging: %w", err)
 	}
 	defer messageRuntime.Close()
 
@@ -91,30 +94,35 @@ func main() {
 			RetryMax: cfg.PaymentRetryMax,
 		},
 	)
-	workerContext, cancelWorker := context.WithCancel(context.Background())
-	workerCount := len(outboxWorkers) + 2
-	workerDone := make(chan struct{}, workerCount)
-	for _, worker := range outboxWorkers {
-		go func() {
-			defer func() { workerDone <- struct{}{} }()
-			worker.Run(workerContext)
-		}()
+	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+2)
+	for index, worker := range outboxWorkers {
+		backgroundTasks = append(backgroundTasks, app.BackgroundTask{
+			Name: fmt.Sprintf("outbox-%d", index+1),
+			Run: func(stopCtx, workCtx context.Context) error {
+				worker.RunGracefully(stopCtx, workCtx)
+				return nil
+			},
+		})
 	}
-	go func() {
-		defer func() { workerDone <- struct{}{} }()
-		paymentWorker.Run(workerContext)
-	}()
-	go func() {
-		defer func() { workerDone <- struct{}{} }()
-		if err := messageRuntime.RunConsumer(workerContext); err != nil {
-			logger.ErrorContext(workerContext, "message consumer stopped", "error", err)
-		}
-	}()
+	backgroundTasks = append(backgroundTasks,
+		app.BackgroundTask{
+			Name: "payment-worker",
+			Run: func(stopCtx, workCtx context.Context) error {
+				paymentWorker.RunGracefully(stopCtx, workCtx)
+				return nil
+			},
+		},
+		app.BackgroundTask{
+			Name: "message-consumer",
+			Run:  messageRuntime.RunConsumerGracefully,
+		},
+	)
+	backgroundRuntime := app.StartBackgroundRuntime(logger, backgroundTasks...)
 	defer func() {
-		cancelWorker()
-		for range workerCount {
-			<-workerDone
-		}
+		backgroundRuntime.ForceStop()
+		cleanupContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = backgroundRuntime.Wait(cleanupContext)
 	}()
 
 	router := httpapi.NewRouterWithConfig(
@@ -190,47 +198,81 @@ func main() {
 		serverErrors <- server.ListenAndServe()
 	}()
 
+	var runError error
+	serverAlreadyStopped := false
 	select {
 	case err := <-serverErrors:
+		serverAlreadyStopped = true
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("http server stopped unexpectedly", "error", err)
-
-			os.Exit(1)
+			runError = fmt.Errorf("http server stopped unexpectedly: %w", err)
 		}
-
-		return
-
+	case err := <-backgroundRuntime.Errors():
+		runError = err
 	case <-shutdownSignal.Done():
 		logger.Info("shutdown signal received", "signal_error", shutdownSignal.Err())
+	}
+	// 恢复系统默认信号行为：第一次信号进入优雅关闭；如果运维人员再次
+	// 发送 SIGTERM/SIGINT，则允许立即终止一个无法及时退出的进程。
+	stop()
 
-		shutdownContext, cancel := context.WithTimeout(
-			context.Background(),
-			cfg.ShutdownTimeout,
-		)
+	shutdownContext, cancelShutdown := context.WithTimeout(
+		context.Background(), cfg.ShutdownTimeout,
+	)
+	defer cancelShutdown()
 
-		defer cancel()
+	// 第一步只让 readiness 失败。此时 liveness、HTTP Server 和后台组件
+	// 仍正常工作一小段时间，让负载均衡器完成摘流。
+	services.BeginDrain()
+	logger.Info("service draining",
+		"drain_delay", cfg.ShutdownDrainDelay,
+		"shutdown_timeout", cfg.ShutdownTimeout,
+	)
 
-		logger.Info(
-			"http server shutting down",
-			"timeout", cfg.ShutdownTimeout,
-		)
+	if !serverAlreadyStopped && !waitForDrain(shutdownContext, cfg.ShutdownDrainDelay) {
+		runError = errors.Join(runError, errors.New("shutdown deadline exceeded during drain delay"))
+	}
 
+	if !serverAlreadyStopped {
+		logger.Info("http server shutting down")
 		if err := server.Shutdown(shutdownContext); err != nil {
-			logger.Error("http server shutdown failed", "error", err)
-
-			os.Exit(1)
+			runError = errors.Join(runError, fmt.Errorf("shutdown http server: %w", err))
+			if closeErr := server.Close(); closeErr != nil {
+				runError = errors.Join(runError, fmt.Errorf("force close http server: %w", closeErr))
+			}
 		}
 
-		err := <-serverErrors
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error(
-				"http server stopped unexpectedly",
-				"error", err,
-			)
-
-			os.Exit(1)
+		if err := <-serverErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			runError = errors.Join(runError, fmt.Errorf("http server stopped: %w", err))
 		}
+	}
 
-		logger.Info("http server stopped")
+	// HTTP 已经不再接收新请求，才停止后台组件领取下一批任务。这样排水期
+	// 内完成的 HTTP 请求产生的 Outbox 记录仍有机会被当前实例处理。
+	backgroundRuntime.BeginDrain()
+	if err := backgroundRuntime.Wait(shutdownContext); err != nil {
+		runError = errors.Join(runError, fmt.Errorf("drain background tasks: %w", err))
+		backgroundRuntime.ForceStop()
+		forcedContext, cancelForced := context.WithTimeout(context.Background(), time.Second)
+		if forcedErr := backgroundRuntime.Wait(forcedContext); forcedErr != nil {
+			runError = errors.Join(runError, fmt.Errorf("force stop background tasks: %w", forcedErr))
+		}
+		cancelForced()
+	}
+
+	logger.Info("service stopped")
+	return runError
+}
+
+func waitForDrain(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }

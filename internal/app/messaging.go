@@ -14,6 +14,7 @@ import (
 
 type messageConsumer interface {
 	Run(context.Context) error
+	RunGracefully(context.Context, context.Context) error
 }
 
 // MessageRuntime 是消息基础设施的组合结果。应用层只依赖 Publisher 和 Handler，
@@ -78,11 +79,19 @@ func NewMessageRuntime(
 
 // RunConsumer 在 direct 模式中只等待退出；Kafka 模式中运行消费者组循环。
 func (r *MessageRuntime) RunConsumer(ctx context.Context) error {
+	return r.RunConsumerGracefully(ctx, ctx)
+}
+
+// RunConsumerGracefully 允许进程先停止拉取新消息，再单独取消已经开始的 Handler。
+func (r *MessageRuntime) RunConsumerGracefully(stopCtx, workCtx context.Context) error {
 	if r == nil || r.consumer == nil {
-		<-ctx.Done()
+		select {
+		case <-stopCtx.Done():
+		case <-workCtx.Done():
+		}
 		return nil
 	}
-	return r.consumer.Run(ctx)
+	return r.consumer.RunGracefully(stopCtx, workCtx)
 }
 
 func (r *MessageRuntime) Close() error {

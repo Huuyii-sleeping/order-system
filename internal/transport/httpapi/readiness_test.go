@@ -13,12 +13,15 @@ import (
 )
 
 type readinessCheckerStub struct {
-	err error
+	err      error
+	draining bool
 }
 
 func (s readinessCheckerStub) CheckReadiness(context.Context) error {
 	return s.err
 }
+
+func (s readinessCheckerStub) IsDraining() bool { return s.draining }
 
 func TestReadinessRouteReportsReady(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -59,6 +62,24 @@ func TestReadinessRouteHidesDependencyFailure(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "database secret details") {
 		t.Errorf("response exposed dependency error: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"status":"unavailable"`) {
+		t.Errorf("body = %q, want unavailable status", response.Body.String())
+	}
+}
+
+func TestReadinessRouteReportsUnavailableWhileDraining(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	response := httptest.NewRecorder()
+	router := httpapi.NewRouterWithConfig(
+		catalogQueriesStub{}, nil, nil,
+		httpapi.RouterConfig{Readiness: readinessCheckerStub{draining: true}},
+	)
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 	if !strings.Contains(response.Body.String(), `"status":"unavailable"`) {
 		t.Errorf("body = %q, want unavailable status", response.Body.String())
