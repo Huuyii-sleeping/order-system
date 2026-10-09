@@ -72,16 +72,17 @@ type Config struct {
 	SimulatedPaymentDelay          time.Duration
 	SimulatedPaymentFailures       int
 
-	NotificationPollInterval        time.Duration
-	NotificationBatchSize           int
-	NotificationWorkerConcurrency   int
-	NotificationLeaseDuration       time.Duration
-	NotificationRetryBase           time.Duration
-	NotificationRetryMax            time.Duration
-	NotificationProviderTimeout     time.Duration
-	SimulatedNotificationDelay      time.Duration
-	SimulatedNotificationFailures   int
-	SimulatedNotificationRejections int
+	NotificationPollInterval            time.Duration
+	NotificationBatchSize               int
+	NotificationWorkerConcurrency       int
+	NotificationLeaseDuration           time.Duration
+	NotificationRetryBase               time.Duration
+	NotificationRetryMax                time.Duration
+	NotificationProviderTimeout         time.Duration
+	SimulatedNotificationDelay          time.Duration
+	SimulatedNotificationFailures       int
+	SimulatedNotificationRejections     int
+	SimulatedNotificationResponseLosses int
 }
 
 func Load() (Config, error) {
@@ -295,6 +296,13 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.SimulatedNotificationRejections = simulatedNotificationRejections
+	simulatedNotificationResponseLosses, err := loadNonNegativeInt(
+		"SIMULATED_NOTIFICATION_RESPONSE_LOSSES", cfg.SimulatedNotificationResponseLosses,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SimulatedNotificationResponseLosses = simulatedNotificationResponseLosses
 	notificationBatchSize, err := loadPositiveInt("NOTIFICATION_BATCH_SIZE", cfg.NotificationBatchSize)
 	if err != nil {
 		return Config{}, err
@@ -343,7 +351,9 @@ func Load() (Config, error) {
 	if cfg.NotificationBatchSize%cfg.NotificationWorkerConcurrency != 0 {
 		notificationCallRounds++
 	}
-	if cfg.NotificationProviderTimeout >= cfg.NotificationLeaseDuration/time.Duration(notificationCallRounds) {
+	// unknown/过期 processing 任务最坏会先 Lookup 再 Send，因此每一轮需要预留
+	// 两次 Provider 调用预算。连续除法避免极端配置下整数乘法溢出。
+	if cfg.NotificationProviderTimeout >= cfg.NotificationLeaseDuration/time.Duration(notificationCallRounds)/2 {
 		return Config{}, fmt.Errorf("notification batch timeout budget must be less than NOTIFICATION_LEASE_DURATION")
 	}
 

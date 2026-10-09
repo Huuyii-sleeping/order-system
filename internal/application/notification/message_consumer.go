@@ -41,12 +41,13 @@ type IDGenerator interface{ NewID() (string, error) }
 type Clock interface{ Now() time.Time }
 
 type Task struct {
-	ID             string
-	Notification   domainnotification.Notification
-	IdempotencyKey string
-	Attempts       int
-	LeaseID        string
-	TraceContext   telemetry.PropagationContext
+	ID                  string
+	Notification        domainnotification.Notification
+	IdempotencyKey      string
+	Attempts            int
+	LeaseID             string
+	NeedsReconciliation bool
+	TraceContext        telemetry.PropagationContext
 }
 
 func NewTask(id string, created domainnotification.Notification) (Task, error) {

@@ -14,3 +14,4 @@
 当前新增：
 
 - [`0016-notification-delivery.md`](0016-notification-delivery.md)：通知 Outbox、Inbox、Task、Provider 幂等键和最终一致投递。
+- [`0017-provider-reconciliation.md`](0017-provider-reconciliation.md)：通过 Provider 查询对账收敛超时和 Worker 崩溃造成的不确定结果。

@@ -130,3 +130,12 @@ groups:
         annotations:
           summary: Order System notification outcomes are unknown
           description: Notification delivery has encountered uncertain provider outcomes during the last five minutes and requires reconciliation.
+
+      - alert: OrderSystemNotificationReconciliationErrors
+        expr: sum(increase(order_system_notification_reconciliations_total{outcome="error"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Order System notification reconciliation is failing
+          description: Notification provider result lookups have failed during the last five minutes.

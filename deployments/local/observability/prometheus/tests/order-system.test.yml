@@ -190,6 +190,8 @@ tests:
         values: '0 1 1 1 1 1'
       - series: 'order_system_notification_tasks_total{outcome="unknown"}'
         values: '0 1 1 1 1 1'
+      - series: 'order_system_notification_reconciliations_total{outcome="error"}'
+        values: '0 1 1 1 1 1'
     alert_rule_test:
       - eval_time: 4m
         alertname: OrderSystemNotificationRetries
@@ -207,3 +209,11 @@ tests:
             exp_annotations:
               summary: Order System notification outcomes are unknown
               description: Notification delivery has encountered uncertain provider outcomes during the last five minutes and requires reconciliation.
+      - eval_time: 4m
+        alertname: OrderSystemNotificationReconciliationErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Order System notification reconciliation is failing
+              description: Notification provider result lookups have failed during the last five minutes.

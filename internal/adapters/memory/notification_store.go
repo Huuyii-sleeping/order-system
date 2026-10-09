@@ -164,12 +164,14 @@ func (s *NotificationStore) ClaimTasks(ctx context.Context, leaseID string, batc
 	for _, id := range eligible {
 		record := tasks[id]
 		current := notifications[record.Notification.ID()]
+		needsReconciliation := current.Status() != domainnotification.StatusPending
 		processing, err := current.StartProcessing(now)
 		if err != nil {
 			return nil, fmt.Errorf("start notification %q: %w", current.ID(), err)
 		}
 		notifications[current.ID()] = processing
 		record.Notification, record.Attempts = processing, record.Attempts+1
+		record.NeedsReconciliation = needsReconciliation
 		record.LeaseID, record.lockedUntil = leaseID, lockedUntil
 		tasks[id] = record
 		claimed = append(claimed, record.Task)

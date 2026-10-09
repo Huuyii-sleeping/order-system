@@ -18,59 +18,60 @@ func TestLoad(t *testing.T) {
 
 		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
-		appName                         string
-		httpAddr                        string
-		otlpTraceEndpoint               string
-		shutdownTimeout                 string
-		shutdownDrainDelay              string
-		readinessTimeout                string
-		storageDriver                   string
-		databaseURL                     string
-		cacheDriver                     string
-		redisURL                        string
-		redisKeyPrefix                  string
-		catalogCacheTTL                 string
-		catalogNotFoundCacheTTL         string
-		catalogLoadTimeout              string
-		accessTokenTTL                  string
-		refreshTokenTTL                 string
-		secureCookies                   string
-		authRateWindow                  string
-		loginRateLimit                  string
-		refreshRateLimit                string
-		outboxPollInterval              string
-		outboxBatchSize                 string
-		outboxLeaseDuration             string
-		outboxRetryBase                 string
-		outboxRetryMax                  string
-		paymentPollInterval             string
-		paymentBatchSize                string
-		paymentWorkerConcurrency        string
-		paymentLeaseDuration            string
-		paymentRetryBase                string
-		paymentRetryMax                 string
-		paymentProviderTimeout          string
-		paymentProviderMaxConcurrent    string
-		paymentCircuitFailureThreshold  string
-		paymentCircuitOpenDuration      string
-		simulatedPaymentDelay           string
-		simulatedPaymentFailures        string
-		messageDriver                   string
-		kafkaBrokers                    string
-		kafkaConsumerGroup              string
-		kafkaDeadLetterTopic            string
-		kafkaConsumerMaxAttempts        string
-		kafkaConsumerRetry              string
-		notificationPollInterval        string
-		notificationBatchSize           string
-		notificationWorkerConcurrency   string
-		notificationLeaseDuration       string
-		notificationRetryBase           string
-		notificationRetryMax            string
-		notificationProviderTimeout     string
-		simulatedNotificationDelay      string
-		simulatedNotificationFailures   string
-		simulatedNotificationRejections string
+		appName                             string
+		httpAddr                            string
+		otlpTraceEndpoint                   string
+		shutdownTimeout                     string
+		shutdownDrainDelay                  string
+		readinessTimeout                    string
+		storageDriver                       string
+		databaseURL                         string
+		cacheDriver                         string
+		redisURL                            string
+		redisKeyPrefix                      string
+		catalogCacheTTL                     string
+		catalogNotFoundCacheTTL             string
+		catalogLoadTimeout                  string
+		accessTokenTTL                      string
+		refreshTokenTTL                     string
+		secureCookies                       string
+		authRateWindow                      string
+		loginRateLimit                      string
+		refreshRateLimit                    string
+		outboxPollInterval                  string
+		outboxBatchSize                     string
+		outboxLeaseDuration                 string
+		outboxRetryBase                     string
+		outboxRetryMax                      string
+		paymentPollInterval                 string
+		paymentBatchSize                    string
+		paymentWorkerConcurrency            string
+		paymentLeaseDuration                string
+		paymentRetryBase                    string
+		paymentRetryMax                     string
+		paymentProviderTimeout              string
+		paymentProviderMaxConcurrent        string
+		paymentCircuitFailureThreshold      string
+		paymentCircuitOpenDuration          string
+		simulatedPaymentDelay               string
+		simulatedPaymentFailures            string
+		messageDriver                       string
+		kafkaBrokers                        string
+		kafkaConsumerGroup                  string
+		kafkaDeadLetterTopic                string
+		kafkaConsumerMaxAttempts            string
+		kafkaConsumerRetry                  string
+		notificationPollInterval            string
+		notificationBatchSize               string
+		notificationWorkerConcurrency       string
+		notificationLeaseDuration           string
+		notificationRetryBase               string
+		notificationRetryMax                string
+		notificationProviderTimeout         string
+		simulatedNotificationDelay          string
+		simulatedNotificationFailures       string
+		simulatedNotificationRejections     string
+		simulatedNotificationResponseLosses string
 
 		want              config.Config
 		wantErrorContains string
@@ -436,6 +437,27 @@ func TestLoad(t *testing.T) {
 			wantErrorContains:        "SIMULATED_PAYMENT_FAILURES",
 		},
 		{
+			name:                                "configures simulated lost notification responses",
+			simulatedNotificationResponseLosses: "2",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				ShutdownTimeout: 10 * time.Second, ShutdownDrainDelay: 2 * time.Second,
+				ReadinessTimeout: 2 * time.Second, StorageDriver: config.StorageMemory,
+				AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 30 * 24 * time.Hour,
+				AuthRateWindow: time.Minute, LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second, OutboxRetryMax: time.Minute,
+				PaymentPollInterval: time.Second, PaymentBatchSize: 10,
+				PaymentLeaseDuration: 30 * time.Second, PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
+				SimulatedNotificationResponseLosses: 2,
+			},
+		},
+		{
+			name:                                "rejects negative simulated notification response losses",
+			simulatedNotificationResponseLosses: "-1",
+			wantErrorContains:                   "SIMULATED_NOTIFICATION_RESPONSE_LOSSES",
+		},
+		{
 			name:                         "rejects zero provider concurrency",
 			paymentProviderMaxConcurrent: "0",
 			wantErrorContains:            "PAYMENT_PROVIDER_MAX_CONCURRENT",
@@ -531,6 +553,7 @@ func TestLoad(t *testing.T) {
 			t.Setenv("SIMULATED_NOTIFICATION_DELAY", tt.simulatedNotificationDelay)
 			t.Setenv("SIMULATED_NOTIFICATION_FAILURES", tt.simulatedNotificationFailures)
 			t.Setenv("SIMULATED_NOTIFICATION_REJECTIONS", tt.simulatedNotificationRejections)
+			t.Setenv("SIMULATED_NOTIFICATION_RESPONSE_LOSSES", tt.simulatedNotificationResponseLosses)
 
 			got, err := config.Load()
 

@@ -197,7 +197,9 @@ curl http://127.0.0.1:8080/orders/<order-id>/notification \
 ```
 
 通知可能经历 `pending -> processing -> sent`，网络错误或超时会进入 `unknown` 并用同一
-个通知幂等键退避重试，Provider 明确拒绝才进入 `failed`。通知接口只返回安全状态，不暴露
+个通知幂等键退避重试。重新领取 `unknown` 或租约过期的 `processing` 任务时，Worker
+会先按幂等键查询 Provider：已发送则直接收敛为 `sent`，查不到才安全重发，查询失败则
+继续保持 `unknown`。Provider 明确拒绝才进入 `failed`。通知接口只返回安全状态，不暴露
 Provider reference 和原始失败原因。通知任务的故障模拟、数据库排查和指标说明见
 [`docs/runbooks/notification-delivery.md`](docs/runbooks/notification-delivery.md)。
 
@@ -261,6 +263,8 @@ Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失�
 `miss`、`read_error` 和 `write_error` 等有限结果聚合，不把商品 ID 放入标签。
 支付 Provider 指标包括调用次数/耗时、调用前拒绝次数、熔断状态和状态切换次数；
 标签只使用固定的结果、拒绝原因和状态，不包含订单 ID、支付 ID 或错误文本。
+通知还暴露 `order_system_notification_reconciliations_total`，使用 `found`、`not_found`
+和 `error` 三种低基数结果观察 Provider 查询对账是否正常收敛。
 
 ## 使用 Prometheus、Tempo 和 Grafana
 
@@ -294,7 +298,8 @@ make observability-down
 ```
 
 当前规则覆盖抓取失败、HTTP 5xx 比例、HTTP P95 延迟、Kafka Consumer Lag、
-Handler 失败、Offset 提交失败、死信发布、支付 Provider 故障和熔断持续打开。
+Handler 失败、Offset 提交失败、死信发布、支付 Provider 故障、熔断持续打开，以及通知
+重试、未知结果和 Provider 对账失败。
 阈值是本地学习基线，生产环境应根据
 SLO、正常流量和故障预算调整。完整的启动、验证和故障模拟步骤见
 `docs/runbooks/local-observability.md`。

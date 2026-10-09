@@ -30,6 +30,14 @@
 
 明确拒绝进入 failed，不会因为同一个可重复的业务拒绝而无限重试。
 
+模拟“Provider 已发送成功，但响应丢失”：
+
+    SIMULATED_NOTIFICATION_RESPONSE_LOSSES=1 NOTIFICATION_RETRY_BASE=1s go run ./cmd/api
+
+第一次调用会在 Provider 内保存成功结果后返回错误，本地状态先进入 unknown。下一轮 Worker
+按同一个幂等键调用 Lookup，查询到成功后直接完成任务，不会再次调用 Send。这同时模拟了
+进程在 Provider 成功后、本地事务提交前崩溃的恢复方式。
+
 ## 查询通知状态
 
 通知查询接口需要登录后的认证信息：GET /orders/{orderID}/notification
@@ -48,9 +56,11 @@
 
 1. 检查 GET /readyz 和数据库连接，确认实例是否已经进入 draining。
 2. 查询 notifications.status、notification_tasks.attempts、next_attempt_at、last_error，确认任务是否积压、是否持续处于 unknown。
-3. 查看 order_system_notification_tasks_total 与 order_system_notification_retries_total 指标，按 outcome/reason 聚合，避免按 notification ID 创建高基数标签。
+3. 查看 order_system_notification_tasks_total、order_system_notification_retries_total 与 order_system_notification_reconciliations_total；对账结果只有 found、not_found、error 三种低基数标签。
 4. 检查 Provider 延迟、错误比例和外部服务状态；不要因为一次超时就手工把通知改成 failed，因为请求可能已经在 Provider 侧成功。
-5. 如果任务租约过期，允许其他 Worker 重新认领。重复调用必须复用 Notification ID 幂等键。
+5. 如果任务租约过期，允许其他 Worker 重新认领。unknown 或过期 processing 任务会先查询 Provider；只有查询明确未找到时才复用 Notification ID 幂等键重发。
+
+如果 reconciliation 的 error 持续增长，优先检查 Provider 查询 API；不要因为查询不可用就切换为盲目 Send。若 not_found 持续增长，需要确认 Provider 查询是否最终一致、是否存在保留期限，以及重发是否仍受幂等键保护。
 
 ## 数据库验收查询
 

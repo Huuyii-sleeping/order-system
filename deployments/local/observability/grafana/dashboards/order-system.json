@@ -147,6 +147,16 @@
       "targets": [{"editorMode": "code", "expr": "sum by (reason) (increase(order_system_notification_retries_total[5m]))", "legendFormat": "{{reason}}", "range": true, "refId": "A"}],
       "title": "Notification retries in 5m",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 42},
+      "id": 14,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"editorMode": "code", "expr": "sum by (outcome) (increase(order_system_notification_reconciliations_total[5m]))", "legendFormat": "{{outcome}}", "range": true, "refId": "A"}],
+      "title": "Notification reconciliations in 5m",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",
@@ -158,5 +168,5 @@
   "timezone": "browser",
   "title": "Order System Overview",
   "uid": "order-system-overview",
-  "version": 3
+  "version": 4
 }

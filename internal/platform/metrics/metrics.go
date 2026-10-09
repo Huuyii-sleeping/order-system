@@ -12,23 +12,24 @@ import (
 )
 
 type Registry struct {
-	registry                *prometheus.Registry
-	httpRequests            *prometheus.CounterVec
-	httpDuration            *prometheus.HistogramVec
-	httpRequestsNow         prometheus.Gauge
-	kafkaProcessingAttempts *prometheus.CounterVec
-	kafkaRetries            *prometheus.CounterVec
-	kafkaDeadLetters        *prometheus.CounterVec
-	kafkaOffsetCommits      *prometheus.CounterVec
-	kafkaConsumerLag        *prometheus.GaugeVec
-	catalogCacheOperations  *prometheus.CounterVec
-	paymentProviderRequests *prometheus.CounterVec
-	paymentProviderDuration *prometheus.HistogramVec
-	paymentProviderRejected *prometheus.CounterVec
-	paymentCircuitState     *prometheus.GaugeVec
-	paymentCircuitChanges   *prometheus.CounterVec
-	notificationTasks       *prometheus.CounterVec
-	notificationRetries     *prometheus.CounterVec
+	registry                    *prometheus.Registry
+	httpRequests                *prometheus.CounterVec
+	httpDuration                *prometheus.HistogramVec
+	httpRequestsNow             prometheus.Gauge
+	kafkaProcessingAttempts     *prometheus.CounterVec
+	kafkaRetries                *prometheus.CounterVec
+	kafkaDeadLetters            *prometheus.CounterVec
+	kafkaOffsetCommits          *prometheus.CounterVec
+	kafkaConsumerLag            *prometheus.GaugeVec
+	catalogCacheOperations      *prometheus.CounterVec
+	paymentProviderRequests     *prometheus.CounterVec
+	paymentProviderDuration     *prometheus.HistogramVec
+	paymentProviderRejected     *prometheus.CounterVec
+	paymentCircuitState         *prometheus.GaugeVec
+	paymentCircuitChanges       *prometheus.CounterVec
+	notificationTasks           *prometheus.CounterVec
+	notificationRetries         *prometheus.CounterVec
+	notificationReconciliations *prometheus.CounterVec
 }
 
 func NewRegistry() *Registry {
@@ -157,6 +158,10 @@ func NewRegistry() *Registry {
 			prometheus.CounterOpts{Namespace: "order_system", Subsystem: "notification", Name: "retries_total", Help: "Total notification task retries by reason."},
 			[]string{"reason"},
 		),
+		notificationReconciliations: prometheus.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "order_system", Subsystem: "notification", Name: "reconciliations_total", Help: "Total notification provider reconciliation lookups by outcome."},
+			[]string{"outcome"},
+		),
 	}
 
 	registry.MustRegister(
@@ -178,6 +183,7 @@ func NewRegistry() *Registry {
 		metrics.paymentCircuitChanges,
 		metrics.notificationTasks,
 		metrics.notificationRetries,
+		metrics.notificationReconciliations,
 	)
 	return metrics
 }
@@ -188,6 +194,10 @@ func (r *Registry) RecordNotificationTask(outcome string) {
 
 func (r *Registry) RecordNotificationRetry(reason string) {
 	r.notificationRetries.WithLabelValues(reason).Inc()
+}
+
+func (r *Registry) RecordNotificationReconciliation(outcome string) {
+	r.notificationReconciliations.WithLabelValues(outcome).Inc()
 }
 
 func (r *Registry) RecordPaymentProviderCall(outcome string, duration time.Duration) {

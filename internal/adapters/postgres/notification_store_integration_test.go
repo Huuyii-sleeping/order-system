@@ -105,9 +105,9 @@ func TestIntegrationNotificationDelivery(t *testing.T) {
 		t.Fatalf("notification after consume = %+v, %v; want pending", pending, err)
 	}
 
-	// 5. 第一次 Provider 调用模拟网络错误，第二次成功，验证 unknown -> sent
-	// 和两次调用使用同一个幂等键。
-	provider := &notificationProviderStub{failuresLeft: 1}
+	// 5. 第一次 Provider 已经发送成功，但模拟响应丢失；第二轮先按稳定幂等键
+	// 查询对账并收敛为 sent，不会再次调用 Send。
+	provider := &notificationProviderStub{loseResponseAfterSend: true}
 	notificationWorker := notificationapp.NewWorker(
 		notificationStore, provider, nil,
 		notificationapp.WorkerConfig{
@@ -135,9 +135,8 @@ func TestIntegrationNotificationDelivery(t *testing.T) {
 	if err != nil || sent.Status() != domainnotification.StatusSent {
 		t.Fatalf("notification after recovery = %+v, %v; want sent", sent, err)
 	}
-	if len(provider.requests) != 2 ||
-		provider.requests[0].IdempotencyKey != provider.requests[1].IdempotencyKey {
-		t.Fatalf("provider requests = %+v; want stable idempotency key", provider.requests)
+	if len(provider.requests) != 1 || provider.lookups != 1 {
+		t.Fatalf("provider sends/lookups = %d/%d; want 1/1", len(provider.requests), provider.lookups)
 	}
 
 	// 6. 重复投递同一通知事件只命中 Inbox，不会新增 Notification/Task。
@@ -190,9 +189,21 @@ func (successfulPaymentProvider) Charge(
 }
 
 type notificationProviderStub struct {
-	mu           sync.Mutex
-	failuresLeft int
-	requests     []notificationapp.SendRequest
+	mu                    sync.Mutex
+	loseResponseAfterSend bool
+	requests              []notificationapp.SendRequest
+	results               map[string]notificationapp.SendResult
+	lookups               int
+}
+
+func (p *notificationProviderStub) Lookup(
+	_ context.Context, idempotencyKey string,
+) (notificationapp.LookupResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lookups++
+	result, found := p.results[idempotencyKey]
+	return notificationapp.LookupResult{Found: found, Result: result}, nil
 }
 
 func (p *notificationProviderStub) Send(
@@ -201,11 +212,16 @@ func (p *notificationProviderStub) Send(
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, request)
-	if p.failuresLeft > 0 {
-		p.failuresLeft--
-		return notificationapp.SendResult{}, errors.New("simulated notification timeout")
-	}
-	return notificationapp.SendResult{
+	result := notificationapp.SendResult{
 		Status: notificationapp.SendSucceeded, ProviderReference: "integration-notification-reference",
-	}, nil
+	}
+	if p.results == nil {
+		p.results = make(map[string]notificationapp.SendResult)
+	}
+	p.results[request.IdempotencyKey] = result
+	if p.loseResponseAfterSend {
+		p.loseResponseAfterSend = false
+		return notificationapp.SendResult{}, errors.New("simulated notification response lost")
+	}
+	return result, nil
 }

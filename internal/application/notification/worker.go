@@ -25,6 +25,7 @@ type TaskStore interface {
 
 type Provider interface {
 	Send(context.Context, SendRequest) (SendResult, error)
+	Lookup(context.Context, string) (LookupResult, error)
 }
 
 type SendRequest struct {
@@ -50,6 +51,13 @@ type SendResult struct {
 	Reason            string
 }
 
+// LookupResult 是 Provider 按稳定幂等键返回的权威查询结果。Found=false
+// 只表示 Provider 当前没有这次投递记录，Worker 仍会用同一个键安全重试。
+type LookupResult struct {
+	Found  bool
+	Result SendResult
+}
+
 type TaskOutcome struct {
 	Notification notification.Notification
 	Reason       string
@@ -68,6 +76,7 @@ type WorkerConfig struct {
 type Metrics interface {
 	RecordNotificationTask(outcome string)
 	RecordNotificationRetry(reason string)
+	RecordNotificationReconciliation(outcome string)
 }
 
 type Worker struct {
@@ -197,10 +206,57 @@ enqueue:
 
 func (w *Worker) processTask(ctx context.Context, task Task) error {
 	taskContext := telemetry.Restore(ctx, task.TraceContext)
-	taskContext, span := telemetry.Tracer("order-system/notification").Start(taskContext, "notification provider send", trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(attribute.String("messaging.system", "notification_task"), attribute.String("messaging.message.id", task.ID), attribute.Int("messaging.message.delivery_attempt", task.Attempts)))
+	taskContext, span := telemetry.Tracer("order-system/notification").Start(taskContext, "notification task process", trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(attribute.String("messaging.system", "notification_task"), attribute.String("messaging.message.id", task.ID), attribute.Int("messaging.message.delivery_attempt", task.Attempts), attribute.Bool("notification.reconciliation", task.NeedsReconciliation)))
 	defer span.End()
 	request := SendRequest{NotificationID: task.Notification.ID(), PaymentID: task.Notification.PaymentID(), OrderID: task.Notification.OrderID(), RecipientID: task.Notification.RecipientID(), EventType: task.Notification.EventType(), AmountCents: task.Notification.AmountCents(), IdempotencyKey: task.IdempotencyKey}
-	callContext, cancel := context.WithTimeout(taskContext, w.config.ProviderTimeout)
+	if task.NeedsReconciliation {
+		found, err := w.reconcile(taskContext, task, span)
+		if err != nil || found {
+			return err
+		}
+	}
+	return w.send(taskContext, task, request, span)
+}
+
+func (w *Worker) reconcile(ctx context.Context, task Task, span trace.Span) (bool, error) {
+	callContext, cancel := context.WithTimeout(ctx, w.config.ProviderTimeout)
+	lookup, providerErr := w.provider.Lookup(callContext, task.IdempotencyKey)
+	callErr := callContext.Err()
+	cancel()
+	at := w.now().UTC()
+	if providerErr != nil || callErr != nil {
+		if providerErr == nil {
+			providerErr = callErr
+		}
+		reason := truncateReason(providerErr.Error(), 1000)
+		span.RecordError(providerErr)
+		span.SetStatus(codes.Error, providerErr.Error())
+		if err := w.retryUnknown(ctx, task, reason, at); err != nil {
+			return false, err
+		}
+		if w.metrics != nil {
+			w.metrics.RecordNotificationReconciliation("error")
+			w.metrics.RecordNotificationRetry("reconciliation_error")
+		}
+		return true, nil
+	}
+	if !lookup.Found {
+		if w.metrics != nil {
+			w.metrics.RecordNotificationReconciliation("not_found")
+		}
+		return false, nil
+	}
+	if w.metrics != nil {
+		w.metrics.RecordNotificationReconciliation("found")
+	}
+	if err := w.completeFromResult(ctx, task, lookup.Result, at); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (w *Worker) send(ctx context.Context, task Task, request SendRequest, span trace.Span) error {
+	callContext, cancel := context.WithTimeout(ctx, w.config.ProviderTimeout)
 	result, providerErr := w.provider.Send(callContext, request)
 	callErr := callContext.Err()
 	cancel()
@@ -216,7 +272,7 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 		if stateErr != nil {
 			return stateErr
 		}
-		if err := w.store.RetryTask(taskContext, task.ID, task.LeaseID, TaskOutcome{Notification: unknown, Reason: reason}, at.Add(w.retryDelay(task.Attempts))); err != nil {
+		if err := w.store.RetryTask(ctx, task.ID, task.LeaseID, TaskOutcome{Notification: unknown, Reason: reason}, at.Add(w.retryDelay(task.Attempts))); err != nil {
 			return fmt.Errorf("retry notification task %q: %w", task.ID, err)
 		}
 		if w.metrics != nil {
@@ -225,6 +281,10 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 		}
 		return nil
 	}
+	return w.completeFromResult(ctx, task, result, at)
+}
+
+func (w *Worker) completeFromResult(ctx context.Context, task Task, result SendResult, at time.Time) error {
 	var outcome TaskOutcome
 	switch result.Status {
 	case SendSucceeded:
@@ -252,7 +312,7 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 		if stateErr != nil {
 			return stateErr
 		}
-		if err := w.store.RetryTask(taskContext, task.ID, task.LeaseID, TaskOutcome{Notification: unknown, Reason: reason}, at.Add(w.retryDelay(task.Attempts))); err != nil {
+		if err := w.store.RetryTask(ctx, task.ID, task.LeaseID, TaskOutcome{Notification: unknown, Reason: reason}, at.Add(w.retryDelay(task.Attempts))); err != nil {
 			return err
 		}
 		if w.metrics != nil {
@@ -261,10 +321,22 @@ func (w *Worker) processTask(ctx context.Context, task Task) error {
 		}
 		return nil
 	}
-	if err := w.store.CompleteTask(taskContext, task.ID, task.LeaseID, outcome, at); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+	if err := w.store.CompleteTask(ctx, task.ID, task.LeaseID, outcome, at); err != nil {
 		return fmt.Errorf("complete notification task %q: %w", task.ID, err)
+	}
+	return nil
+}
+
+func (w *Worker) retryUnknown(ctx context.Context, task Task, reason string, at time.Time) error {
+	unknown, err := task.Notification.MarkUnknown(reason, at)
+	if err != nil {
+		return err
+	}
+	if err := w.store.RetryTask(ctx, task.ID, task.LeaseID, TaskOutcome{Notification: unknown, Reason: reason}, at.Add(w.retryDelay(task.Attempts))); err != nil {
+		return fmt.Errorf("retry notification task %q: %w", task.ID, err)
+	}
+	if w.metrics != nil {
+		w.metrics.RecordNotificationTask("unknown")
 	}
 	return nil
 }

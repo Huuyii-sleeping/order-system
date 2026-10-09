@@ -146,11 +146,12 @@ func (s *NotificationStore) ClaimTasks(ctx context.Context, leaseID string, batc
 		if err != nil {
 			return nil, fmt.Errorf("restore notification %q: %w", notificationID, err)
 		}
+		needsReconciliation := current.Status() != domainnotification.StatusPending
 		processing, err := current.StartProcessing(now)
 		if err != nil {
 			return nil, fmt.Errorf("start notification %q: %w", notificationID, err)
 		}
-		tasks = append(tasks, notificationapp.Task{ID: taskID, Notification: processing, IdempotencyKey: idempotencyKey, Attempts: attempts + 1, LeaseID: leaseID, TraceContext: telemetry.PropagationContext{TraceParent: traceParent.String, TraceState: traceState.String}})
+		tasks = append(tasks, notificationapp.Task{ID: taskID, Notification: processing, IdempotencyKey: idempotencyKey, Attempts: attempts + 1, LeaseID: leaseID, NeedsReconciliation: needsReconciliation, TraceContext: telemetry.PropagationContext{TraceParent: traceParent.String, TraceState: traceState.String}})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate notification tasks: %w", err)

@@ -171,7 +171,8 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 	)
 	notificationProvider := notificationprovider.NewSimulatedWithConfig(notificationprovider.Config{
 		Delay: cfg.SimulatedNotificationDelay, Failures: cfg.SimulatedNotificationFailures,
-		Rejections: cfg.SimulatedNotificationRejections,
+		Rejections:     cfg.SimulatedNotificationRejections,
+		ResponseLosses: cfg.SimulatedNotificationResponseLosses,
 	})
 	notificationConsumer := notificationapp.NewConsumer(
 		notificationStore, idgenerator.Random{}, clock.System{},
