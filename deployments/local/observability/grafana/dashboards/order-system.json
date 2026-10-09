@@ -157,6 +157,16 @@
       "targets": [{"editorMode": "code", "expr": "sum by (outcome) (increase(order_system_notification_reconciliations_total[5m]))", "legendFormat": "{{outcome}}", "range": true, "refId": "A"}],
       "title": "Notification reconciliations in 5m",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 50},
+      "id": 15,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"editorMode": "code", "expr": "sum by (outcome) (increase(order_system_notification_webhooks_total[5m]))", "legendFormat": "{{outcome}}", "range": true, "refId": "A"}],
+      "title": "Notification provider webhooks in 5m",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",
@@ -168,5 +178,5 @@
   "timezone": "browser",
   "title": "Order System Overview",
   "uid": "order-system-overview",
-  "version": 4
+  "version": 5
 }

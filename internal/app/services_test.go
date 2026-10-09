@@ -80,7 +80,7 @@ func TestNewMemoryServicesWiresAsyncPaymentFlow(t *testing.T) {
 	if services.Payments == nil || services.PaymentResults == nil || services.PaymentQueries == nil ||
 		services.PaymentTasks == nil || services.PaymentProvider == nil || services.Notifications == nil ||
 		services.NotificationQueries == nil || services.NotificationTasks == nil ||
-		services.NotificationProvider == nil || len(services.Outboxes) != 2 {
+		services.NotificationProvider == nil || services.NotificationWebhooks == nil || len(services.Outboxes) != 2 {
 		t.Fatal("payment and notification flows, query services, task stores, providers, and memory outboxes must be wired")
 	}
 }

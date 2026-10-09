@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	authapp "example.com/order-system/internal/application/auth"
@@ -67,13 +68,16 @@ type ReadinessChecker interface {
 }
 
 type RouterConfig struct {
-	AuthSecurity        AuthSecurityConfig
-	Readiness           ReadinessChecker
-	ReadinessTimeout    time.Duration
-	MetricsHandler      http.Handler
-	PaymentQueries      PaymentQueries
-	NotificationQueries NotificationQueries
-	Logger              *slog.Logger
+	AuthSecurity                AuthSecurityConfig
+	Readiness                   ReadinessChecker
+	ReadinessTimeout            time.Duration
+	MetricsHandler              http.Handler
+	PaymentQueries              PaymentQueries
+	NotificationQueries         NotificationQueries
+	NotificationWebhooks        NotificationWebhookUseCases
+	NotificationWebhookSecurity NotificationWebhookSecurity
+	NotificationWebhookMetrics  NotificationWebhookMetrics
+	Logger                      *slog.Logger
 }
 
 // NewRouter 创建 API 使用的 HTTP 路由。
@@ -153,6 +157,12 @@ func NewRouterWithConfig(
 			"GET /orders/{orderID}/notification",
 			WithAuthentication(authUseCases, http.HandlerFunc(notificationHandler.getByOrderID)),
 		)
+	}
+	if config.NotificationWebhooks != nil && strings.TrimSpace(config.NotificationWebhookSecurity.Secret) != "" {
+		webhookHandler := newNotificationWebhookHandler(
+			config.NotificationWebhooks, config.NotificationWebhookSecurity, config.NotificationWebhookMetrics,
+		)
+		mux.HandleFunc("POST /webhooks/notifications/provider", webhookHandler.receive)
 	}
 
 	// 返回原始路由器。

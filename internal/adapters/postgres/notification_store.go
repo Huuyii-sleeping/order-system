@@ -19,6 +19,102 @@ type NotificationStore struct{ db *sql.DB }
 
 func NewNotificationStore(db *sql.DB) *NotificationStore { return &NotificationStore{db: db} }
 
+func (s *NotificationStore) TransactWebhook(ctx context.Context, fn func(notificationapp.WebhookTransaction) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin notification webhook transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(&notificationWebhookTransaction{ctx: ctx, tx: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit notification webhook transaction: %w", err)
+	}
+	return nil
+}
+
+type notificationWebhookTransaction struct {
+	ctx context.Context
+	tx  *sql.Tx
+}
+
+func (tx *notificationWebhookTransaction) LockNotification(notificationID, idempotencyKey string) (domainnotification.Notification, error) {
+	var lockedNotificationID string
+	err := tx.tx.QueryRowContext(tx.ctx, `
+		SELECT notification_id FROM notification_tasks
+		WHERE notification_id = $1 AND idempotency_key = $2
+		FOR UPDATE
+	`, strings.TrimSpace(notificationID), strings.TrimSpace(idempotencyKey)).Scan(&lockedNotificationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domainnotification.Notification{}, domainnotification.ErrNotificationNotFound
+	}
+	if err != nil {
+		return domainnotification.Notification{}, fmt.Errorf("lock webhook notification task: %w", err)
+	}
+	current, err := scanNotification(tx.tx.QueryRowContext(tx.ctx, notificationSelect+` WHERE id = $1 FOR UPDATE`, lockedNotificationID))
+	if err != nil {
+		return domainnotification.Notification{}, fmt.Errorf("lock webhook notification: %w", err)
+	}
+	return current, nil
+}
+
+func (tx *notificationWebhookTransaction) TryBeginWebhookEvent(eventID, notificationID, payloadHash string, receivedAt time.Time) (bool, error) {
+	result, err := tx.tx.ExecContext(tx.ctx, `
+		INSERT INTO notification_webhook_events (event_id, notification_id, payload_hash, received_at, processed_at)
+		VALUES ($1, $2, $3, $4, $4)
+		ON CONFLICT (event_id) DO NOTHING
+	`, eventID, notificationID, payloadHash, receivedAt)
+	if err != nil {
+		return false, fmt.Errorf("insert notification webhook event: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read notification webhook rows: %w", err)
+	}
+	if rows == 1 {
+		return true, nil
+	}
+	var existingNotificationID, existingPayloadHash string
+	if err := tx.tx.QueryRowContext(tx.ctx, `
+		SELECT notification_id, payload_hash FROM notification_webhook_events WHERE event_id = $1
+	`, eventID).Scan(&existingNotificationID, &existingPayloadHash); err != nil {
+		return false, fmt.Errorf("read duplicate notification webhook event: %w", err)
+	}
+	if existingNotificationID != notificationID || existingPayloadHash != payloadHash {
+		return false, notificationapp.ErrWebhookEventConflict
+	}
+	return false, nil
+}
+
+func (tx *notificationWebhookTransaction) CompleteNotification(updated domainnotification.Notification, reason string, completedAt time.Time) error {
+	result, err := tx.tx.ExecContext(tx.ctx, `
+		UPDATE notifications
+		SET status = $1, provider_reference = $2, failure_reason = $3, updated_at = $4
+		WHERE id = $5
+	`, updated.Status(), nullableText(updated.ProviderReference()), nullableText(updated.FailureReason()), updated.UpdatedAt(), updated.ID())
+	if err != nil {
+		return fmt.Errorf("update webhook notification result: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		return notificationapp.ErrInvalidTask
+	}
+	result, err = tx.tx.ExecContext(tx.ctx, `
+		UPDATE notification_tasks
+		SET completed_at = COALESCE(completed_at, $1), lease_id = NULL, locked_until = NULL, last_error = $2
+		WHERE notification_id = $3
+	`, completedAt, nullableText(reason), updated.ID())
+	if err != nil {
+		return fmt.Errorf("complete webhook notification task: %w", err)
+	}
+	rows, err = result.RowsAffected()
+	if err != nil || rows != 1 {
+		return notificationapp.ErrInvalidTask
+	}
+	return nil
+}
+
 func (s *NotificationStore) Transact(ctx context.Context, fn func(notificationapp.Transaction) error) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {

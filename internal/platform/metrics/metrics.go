@@ -30,6 +30,7 @@ type Registry struct {
 	notificationTasks           *prometheus.CounterVec
 	notificationRetries         *prometheus.CounterVec
 	notificationReconciliations *prometheus.CounterVec
+	notificationWebhooks        *prometheus.CounterVec
 }
 
 func NewRegistry() *Registry {
@@ -162,6 +163,10 @@ func NewRegistry() *Registry {
 			prometheus.CounterOpts{Namespace: "order_system", Subsystem: "notification", Name: "reconciliations_total", Help: "Total notification provider reconciliation lookups by outcome."},
 			[]string{"outcome"},
 		),
+		notificationWebhooks: prometheus.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "order_system", Subsystem: "notification", Name: "webhooks_total", Help: "Total notification provider webhook requests by bounded outcome."},
+			[]string{"outcome"},
+		),
 	}
 
 	registry.MustRegister(
@@ -184,6 +189,7 @@ func NewRegistry() *Registry {
 		metrics.notificationTasks,
 		metrics.notificationRetries,
 		metrics.notificationReconciliations,
+		metrics.notificationWebhooks,
 	)
 	return metrics
 }
@@ -198,6 +204,10 @@ func (r *Registry) RecordNotificationRetry(reason string) {
 
 func (r *Registry) RecordNotificationReconciliation(outcome string) {
 	r.notificationReconciliations.WithLabelValues(outcome).Inc()
+}
+
+func (r *Registry) RecordNotificationWebhook(outcome string) {
+	r.notificationWebhooks.WithLabelValues(outcome).Inc()
 }
 
 func (r *Registry) RecordPaymentProviderCall(outcome string, duration time.Duration) {

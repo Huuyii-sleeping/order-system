@@ -68,6 +68,8 @@ func TestLoad(t *testing.T) {
 		notificationRetryBase               string
 		notificationRetryMax                string
 		notificationProviderTimeout         string
+		notificationWebhookSecret           string
+		notificationWebhookTolerance        string
 		simulatedNotificationDelay          string
 		simulatedNotificationFailures       string
 		simulatedNotificationRejections     string
@@ -453,6 +455,31 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name:                         "configures notification webhook security",
+			notificationWebhookSecret:    "local-test-secret-with-32-bytes-min",
+			notificationWebhookTolerance: "2m",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				ShutdownTimeout: 10 * time.Second, ShutdownDrainDelay: 2 * time.Second,
+				ReadinessTimeout: 2 * time.Second, StorageDriver: config.StorageMemory,
+				AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 30 * 24 * time.Hour,
+				AuthRateWindow: time.Minute, LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second, OutboxRetryMax: time.Minute,
+				PaymentPollInterval: time.Second, PaymentBatchSize: 10,
+				PaymentLeaseDuration: 30 * time.Second, PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
+				NotificationWebhookSecret: "local-test-secret-with-32-bytes-min", NotificationWebhookTolerance: 2 * time.Minute,
+			},
+		},
+		{
+			name: "rejects short notification webhook secret", notificationWebhookSecret: "too-short",
+			wantErrorContains: "NOTIFICATION_WEBHOOK_SECRET",
+		},
+		{
+			name: "rejects zero notification webhook tolerance", notificationWebhookTolerance: "0s",
+			wantErrorContains: "NOTIFICATION_WEBHOOK_TOLERANCE",
+		},
+		{
 			name:                                "rejects negative simulated notification response losses",
 			simulatedNotificationResponseLosses: "-1",
 			wantErrorContains:                   "SIMULATED_NOTIFICATION_RESPONSE_LOSSES",
@@ -550,6 +577,8 @@ func TestLoad(t *testing.T) {
 			t.Setenv("NOTIFICATION_RETRY_BASE", tt.notificationRetryBase)
 			t.Setenv("NOTIFICATION_RETRY_MAX", tt.notificationRetryMax)
 			t.Setenv("NOTIFICATION_PROVIDER_TIMEOUT", tt.notificationProviderTimeout)
+			t.Setenv("NOTIFICATION_WEBHOOK_SECRET", tt.notificationWebhookSecret)
+			t.Setenv("NOTIFICATION_WEBHOOK_TOLERANCE", tt.notificationWebhookTolerance)
 			t.Setenv("SIMULATED_NOTIFICATION_DELAY", tt.simulatedNotificationDelay)
 			t.Setenv("SIMULATED_NOTIFICATION_FAILURES", tt.simulatedNotificationFailures)
 			t.Setenv("SIMULATED_NOTIFICATION_REJECTIONS", tt.simulatedNotificationRejections)
@@ -640,6 +669,9 @@ func TestLoad(t *testing.T) {
 			}
 			if want.NotificationProviderTimeout == 0 {
 				want.NotificationProviderTimeout = 2 * time.Second
+			}
+			if want.NotificationWebhookTolerance == 0 {
+				want.NotificationWebhookTolerance = 5 * time.Minute
 			}
 			if got != want {
 				t.Errorf("Load() = %+v, want %+v", got, want)

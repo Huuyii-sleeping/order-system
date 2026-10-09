@@ -79,6 +79,8 @@ type Config struct {
 	NotificationRetryBase               time.Duration
 	NotificationRetryMax                time.Duration
 	NotificationProviderTimeout         time.Duration
+	NotificationWebhookSecret           string
+	NotificationWebhookTolerance        time.Duration
 	SimulatedNotificationDelay          time.Duration
 	SimulatedNotificationFailures       int
 	SimulatedNotificationRejections     int
@@ -136,6 +138,8 @@ func Load() (Config, error) {
 		NotificationRetryBase:          time.Second,
 		NotificationRetryMax:           time.Minute,
 		NotificationProviderTimeout:    2 * time.Second,
+		NotificationWebhookSecret:      strings.TrimSpace(os.Getenv("NOTIFICATION_WEBHOOK_SECRET")),
+		NotificationWebhookTolerance:   5 * time.Minute,
 	}
 
 	switch cfg.StorageDriver {
@@ -208,6 +212,7 @@ func Load() (Config, error) {
 		{name: "NOTIFICATION_RETRY_BASE", target: &cfg.NotificationRetryBase},
 		{name: "NOTIFICATION_RETRY_MAX", target: &cfg.NotificationRetryMax},
 		{name: "NOTIFICATION_PROVIDER_TIMEOUT", target: &cfg.NotificationProviderTimeout},
+		{name: "NOTIFICATION_WEBHOOK_TOLERANCE", target: &cfg.NotificationWebhookTolerance},
 		{name: "KAFKA_CONSUMER_RETRY", target: &cfg.KafkaConsumerRetry},
 	} {
 		if err := loadPositiveDuration(setting.name, setting.target); err != nil {
@@ -330,6 +335,9 @@ func Load() (Config, error) {
 	}
 	if cfg.NotificationRetryMax < cfg.NotificationRetryBase {
 		return Config{}, fmt.Errorf("NOTIFICATION_RETRY_MAX must be greater than or equal to NOTIFICATION_RETRY_BASE")
+	}
+	if cfg.NotificationWebhookSecret != "" && len(cfg.NotificationWebhookSecret) < 32 {
+		return Config{}, fmt.Errorf("NOTIFICATION_WEBHOOK_SECRET must be at least 32 bytes when configured")
 	}
 	if cfg.ShutdownDrainDelay >= cfg.ShutdownTimeout {
 		return Config{}, fmt.Errorf(

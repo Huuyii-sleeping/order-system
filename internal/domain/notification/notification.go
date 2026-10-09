@@ -111,6 +111,53 @@ func (n Notification) MarkUnknown(reason string, at time.Time) (Notification, er
 	return n, nil
 }
 
+// ConfirmSent 接收 Provider 主动返回的成功终态。Webhook 可能早于同步 Send
+// 响应到达，也可能在本地状态进入 unknown 后到达，因此它允许从所有非终态
+// 收敛；已经是相同 sent 结果时按幂等成功处理，但绝不覆盖相反的终态。
+func (n Notification) ConfirmSent(providerReference string, at time.Time) (Notification, bool, error) {
+	providerReference = strings.TrimSpace(providerReference)
+	if providerReference == "" {
+		return Notification{}, false, ErrInvalidNotificationState
+	}
+	if n.status == StatusSent {
+		if n.providerReference != providerReference {
+			return Notification{}, false, ErrInvalidNotificationState
+		}
+		return n, false, nil
+	}
+	if n.status == StatusFailed {
+		return Notification{}, false, ErrInvalidNotificationState
+	}
+	if err := n.validateTransitionTime(at); err != nil {
+		return Notification{}, false, err
+	}
+	n.status, n.providerReference, n.failureReason, n.updatedAt = StatusSent, providerReference, "", at.UTC()
+	return n, true, nil
+}
+
+// ConfirmFailed 与 ConfirmSent 对称：Provider 的明确拒绝可以收敛 pending、
+// processing 或 unknown，但不允许把已经成功的通知倒退为失败。
+func (n Notification) ConfirmFailed(reason string, at time.Time) (Notification, bool, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return Notification{}, false, ErrInvalidNotificationState
+	}
+	if n.status == StatusFailed {
+		if n.failureReason != reason {
+			return Notification{}, false, ErrInvalidNotificationState
+		}
+		return n, false, nil
+	}
+	if n.status == StatusSent {
+		return Notification{}, false, ErrInvalidNotificationState
+	}
+	if err := n.validateTransitionTime(at); err != nil {
+		return Notification{}, false, err
+	}
+	n.status, n.providerReference, n.failureReason, n.updatedAt = StatusFailed, "", reason, at.UTC()
+	return n, true, nil
+}
+
 func (n Notification) validateTransitionTime(at time.Time) error {
 	if at.IsZero() || at.Before(n.updatedAt) {
 		return ErrInvalidNotificationState

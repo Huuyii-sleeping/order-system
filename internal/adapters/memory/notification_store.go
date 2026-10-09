@@ -24,9 +24,17 @@ type NotificationStore struct {
 	mu sync.RWMutex
 
 	inboxMessages         map[string]inboxMessage
+	webhookEvents         map[string]memoryNotificationWebhookEvent
 	notificationsByID     map[string]domainnotification.Notification
 	notificationIDByOrder map[string]string
 	tasks                 map[string]memoryNotificationTask
+}
+
+type memoryNotificationWebhookEvent struct {
+	notificationID string
+	payloadHash    string
+	receivedAt     time.Time
+	processedAt    time.Time
 }
 
 type memoryNotificationTask struct {
@@ -40,10 +48,85 @@ type memoryNotificationTask struct {
 func NewNotificationStore() *NotificationStore {
 	return &NotificationStore{
 		inboxMessages:         make(map[string]inboxMessage),
+		webhookEvents:         make(map[string]memoryNotificationWebhookEvent),
 		notificationsByID:     make(map[string]domainnotification.Notification),
 		notificationIDByOrder: make(map[string]string),
 		tasks:                 make(map[string]memoryNotificationTask),
 	}
+}
+
+// TransactWebhook 使用与消息消费相同的 copy-on-write 方式模拟数据库事务。
+// 回调处理中任一步失败时，事件记录、通知和任务都不会部分提交。
+func (s *NotificationStore) TransactWebhook(ctx context.Context, fn func(notificationapp.WebhookTransaction) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx := &memoryNotificationWebhookTransaction{
+		webhookEvents:     cloneMap(s.webhookEvents),
+		notificationsByID: cloneMap(s.notificationsByID),
+		tasks:             cloneMap(s.tasks),
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.webhookEvents, s.notificationsByID, s.tasks = tx.webhookEvents, tx.notificationsByID, tx.tasks
+	return nil
+}
+
+type memoryNotificationWebhookTransaction struct {
+	webhookEvents     map[string]memoryNotificationWebhookEvent
+	notificationsByID map[string]domainnotification.Notification
+	tasks             map[string]memoryNotificationTask
+}
+
+func (tx *memoryNotificationWebhookTransaction) LockNotification(notificationID, idempotencyKey string) (domainnotification.Notification, error) {
+	notificationID, idempotencyKey = strings.TrimSpace(notificationID), strings.TrimSpace(idempotencyKey)
+	current, exists := tx.notificationsByID[notificationID]
+	if !exists {
+		return domainnotification.Notification{}, domainnotification.ErrNotificationNotFound
+	}
+	for _, task := range tx.tasks {
+		if task.Notification.ID() == notificationID && task.IdempotencyKey == idempotencyKey {
+			return current, nil
+		}
+	}
+	return domainnotification.Notification{}, domainnotification.ErrNotificationNotFound
+}
+
+func (tx *memoryNotificationWebhookTransaction) TryBeginWebhookEvent(eventID, notificationID, payloadHash string, receivedAt time.Time) (bool, error) {
+	if existing, exists := tx.webhookEvents[eventID]; exists {
+		if existing.notificationID != notificationID || existing.payloadHash != payloadHash {
+			return false, notificationapp.ErrWebhookEventConflict
+		}
+		return false, nil
+	}
+	tx.webhookEvents[eventID] = memoryNotificationWebhookEvent{
+		notificationID: notificationID, payloadHash: payloadHash,
+		receivedAt: receivedAt.UTC(), processedAt: receivedAt.UTC(),
+	}
+	return true, nil
+}
+
+func (tx *memoryNotificationWebhookTransaction) CompleteNotification(updated domainnotification.Notification, reason string, completedAt time.Time) error {
+	for taskID, task := range tx.tasks {
+		if task.Notification.ID() != updated.ID() {
+			continue
+		}
+		tx.notificationsByID[updated.ID()] = updated
+		task.Notification, task.lastError = updated, strings.TrimSpace(reason)
+		if task.completedAt.IsZero() {
+			task.completedAt = completedAt.UTC()
+		}
+		task.LeaseID, task.lockedUntil = "", time.Time{}
+		tx.tasks[taskID] = task
+		return nil
+	}
+	return notificationapp.ErrInvalidTask
 }
 
 func (s *NotificationStore) Transact(ctx context.Context, fn func(notificationapp.Transaction) error) error {

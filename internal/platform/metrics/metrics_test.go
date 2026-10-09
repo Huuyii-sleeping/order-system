@@ -29,6 +29,7 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 	registry.RecordNotificationTask("sent")
 	registry.RecordNotificationRetry("provider_error")
 	registry.RecordNotificationReconciliation("found")
+	registry.RecordNotificationWebhook("processed")
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
@@ -61,6 +62,7 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 		`order_system_notification_tasks_total{outcome="sent"} 1`,
 		`order_system_notification_retries_total{reason="provider_error"} 1`,
 		`order_system_notification_reconciliations_total{outcome="found"} 1`,
+		`order_system_notification_webhooks_total{outcome="processed"} 1`,
 		`go_goroutines`,
 	} {
 		if !strings.Contains(output, want) {

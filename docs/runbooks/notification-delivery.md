@@ -16,6 +16,39 @@
 
 该测试会创建临时 schema，验证通知 Outbox、Inbox、任务租约、Provider 重试和客户隔离，测试结束后自动删除 schema。
 
+## Provider Webhook
+
+设置至少 32 字节的本地测试密钥后启动服务；未设置时 Webhook 路由不会注册：
+
+    NOTIFICATION_WEBHOOK_SECRET=replace-with-a-random-secret-at-least-32-bytes go run ./cmd/api
+
+Provider 请求格式：
+
+    POST /webhooks/notifications/provider
+    Content-Type: application/json
+    X-Webhook-Timestamp: <Unix 秒>
+    X-Webhook-Signature: <HMAC-SHA256 十六进制>
+
+签名原文必须是 `timestamp + "." + rawBody`。不要先解析再重新序列化 JSON，否则空格或字段顺序变化会导致签名不一致。默认只接受当前时间前后 5 分钟内的请求，可用 `NOTIFICATION_WEBHOOK_TOLERANCE` 调整。
+
+请求体示例：
+
+    {"event_id":"provider-event-1","notification_id":"notification-1","idempotency_key":"notification-1","status":"succeeded","provider_reference":"provider-reference-1"}
+
+本地可使用以下命令生成签名并发送回调。示例值是明显的本地占位值，不要替换或记录生产 Secret：
+
+    WEBHOOK_SECRET=replace-with-a-random-secret-at-least-32-bytes
+    WEBHOOK_TIMESTAMP=$(date +%s)
+    WEBHOOK_BODY='{"event_id":"provider-event-1","notification_id":"notification-1","idempotency_key":"notification-1","status":"succeeded","provider_reference":"provider-reference-1"}'
+    WEBHOOK_SIGNATURE=$(printf '%s' "${WEBHOOK_TIMESTAMP}.${WEBHOOK_BODY}" | openssl dgst -sha256 -hmac "${WEBHOOK_SECRET}" -hex | awk '{print $NF}')
+    curl -i -X POST http://127.0.0.1:8080/webhooks/notifications/provider \
+      -H 'Content-Type: application/json' \
+      -H "X-Webhook-Timestamp: ${WEBHOOK_TIMESTAMP}" \
+      -H "X-Webhook-Signature: ${WEBHOOK_SIGNATURE}" \
+      --data "${WEBHOOK_BODY}"
+
+首次处理返回 `processed: true`；完全相同的重试返回 200 和 `processed: false`。相同 `event_id` 携带不同请求体，或试图用相反结果覆盖终态，会返回 409。签名错误或时间戳超过容忍窗口返回 401。
+
 ## 故障演练
 
 应用使用模拟 Provider，可以通过环境变量制造延迟、网络错误或明确拒绝：
@@ -56,7 +89,7 @@
 
 1. 检查 GET /readyz 和数据库连接，确认实例是否已经进入 draining。
 2. 查询 notifications.status、notification_tasks.attempts、next_attempt_at、last_error，确认任务是否积压、是否持续处于 unknown。
-3. 查看 order_system_notification_tasks_total、order_system_notification_retries_total 与 order_system_notification_reconciliations_total；对账结果只有 found、not_found、error 三种低基数标签。
+3. 查看 order_system_notification_tasks_total、order_system_notification_retries_total、order_system_notification_reconciliations_total 与 order_system_notification_webhooks_total；Webhook 只使用 processed、duplicate、invalid_signature、stale、invalid_payload、not_found、conflict、error 等低基数结果标签。
 4. 检查 Provider 延迟、错误比例和外部服务状态；不要因为一次超时就手工把通知改成 failed，因为请求可能已经在 Provider 侧成功。
 5. 如果任务租约过期，允许其他 Worker 重新认领。unknown 或过期 processing 任务会先查询 Provider；只有查询明确未找到时才复用 Notification ID 幂等键重发。
 
@@ -67,5 +100,7 @@
     SELECT id, order_id, status, created_at, updated_at FROM notifications ORDER BY created_at DESC LIMIT 20;
 
     SELECT id, notification_id, attempts, next_attempt_at, locked_until, completed_at, last_error FROM notification_tasks ORDER BY next_attempt_at DESC LIMIT 20;
+
+    SELECT event_id, notification_id, received_at, processed_at FROM notification_webhook_events ORDER BY processed_at DESC LIMIT 20;
 
 不要直接删除 unknown 任务来“清理告警”。先确认 Provider 是否已经发送，再决定是否通过受控的补偿或对账流程处理；本地学习项目没有提供跳过幂等保护的管理员接口。

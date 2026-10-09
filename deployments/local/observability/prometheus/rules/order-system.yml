@@ -139,3 +139,21 @@ groups:
         annotations:
           summary: Order System notification reconciliation is failing
           description: Notification provider result lookups have failed during the last five minutes.
+
+      - alert: OrderSystemNotificationWebhookProcessingFailures
+        expr: sum(increase(order_system_notification_webhooks_total{outcome=~"conflict|error"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Notification provider webhooks cannot be applied
+          description: Signed notification callbacks have failed or conflicted with an existing terminal result during the last five minutes.
+
+      - alert: OrderSystemNotificationWebhookAuthenticationFailures
+        expr: sum(increase(order_system_notification_webhooks_total{outcome=~"invalid_signature|stale"}[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Notification webhook authentication failures are elevated
+          description: More than ten notification callbacks failed signature or timestamp validation during the last five minutes.

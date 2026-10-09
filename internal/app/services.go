@@ -41,6 +41,7 @@ type Services struct {
 	PaymentProvider      paymentapp.Provider
 	Notifications        *notificationapp.Consumer
 	NotificationQueries  *notificationapp.QueryService
+	NotificationWebhooks *notificationapp.WebhookService
 	NotificationTasks    notificationapp.TaskStore
 	NotificationProvider notificationapp.Provider
 	LoginLimiter         ratelimit.Limiter
@@ -83,6 +84,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		notificationapp.Store
 		notificationapp.TaskStore
 		notificationapp.QueryStore
+		notificationapp.WebhookStore
 	}
 	var readiness []dependencyPinger
 	var closers []io.Closer
@@ -202,6 +204,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		PaymentProvider:      paymentProvider,
 		Notifications:        notificationConsumer,
 		NotificationQueries:  notificationapp.NewQueryService(notificationStore),
+		NotificationWebhooks: notificationapp.NewWebhookService(notificationStore, clock.System{}),
 		NotificationTasks:    notificationStore,
 		NotificationProvider: notificationProvider,
 		LoginLimiter:         loginLimiter,

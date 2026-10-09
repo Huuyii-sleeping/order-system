@@ -2,7 +2,10 @@ package postgres_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -175,6 +178,75 @@ func TestIntegrationNotificationDelivery(t *testing.T) {
 		ctx, created.Order.ID(), "other-notification-customer",
 	); !errors.Is(err, domainnotification.ErrNotificationNotFound) {
 		t.Fatalf("cross-customer notification query error = %v; want not found", err)
+	}
+}
+
+func TestIntegrationNotificationWebhookCommitsEventResultAndTaskTogether(t *testing.T) {
+	databaseURL := integrationDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db := openMigratedIdentityTestDB(t, ctx, databaseURL)
+	store := postgres.NewNotificationStore(db)
+	now := fixedClock{}.Now()
+	payload, err := json.Marshal(event.NotificationRequestedV1{
+		NotificationID: "webhook-notification-1", PaymentID: "webhook-payment-1",
+		OrderID: "webhook-order-1", CustomerID: "webhook-customer-1",
+		RecipientID: "webhook-customer-1", EventType: event.NotificationPaymentSucceededV1,
+		AmountCents: 12900, OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := outbox.NewMessage("webhook-requested-1", event.NotificationRequestedV1Topic, "webhook-order-1", payload, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer := notificationapp.NewConsumer(store, &sequenceIDGenerator{prefix: "webhook-task"}, fixedClock{})
+	if _, err := consumer.Consume(ctx, message); err != nil {
+		t.Fatalf("Consume() error = %v", err)
+	}
+	claimed, err := store.ClaimTasks(ctx, "worker-before-webhook", 1, now, now.Add(time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimTasks() before webhook = %+v, %v", claimed, err)
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"provider_result":"succeeded"}`)))
+	webhooks := notificationapp.NewWebhookService(store, fixedClock{})
+	callback := notificationapp.WebhookEvent{
+		ID: "provider-event-1", NotificationID: "webhook-notification-1",
+		IdempotencyKey: "webhook-notification-1", Status: notificationapp.SendSucceeded,
+		ProviderReference: "webhook-provider-reference-1", PayloadHash: hash,
+	}
+	first, err := webhooks.Process(ctx, callback)
+	if err != nil || !first.Processed || first.Notification.Status() != domainnotification.StatusSent {
+		t.Fatalf("first Process() = %+v, %v", first, err)
+	}
+	duplicate, err := webhooks.Process(ctx, callback)
+	if err != nil || duplicate.Processed {
+		t.Fatalf("duplicate Process() = %+v, %v", duplicate, err)
+	}
+
+	var eventCount, completedTaskCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT count(*) FROM notification_webhook_events WHERE event_id = $1),
+			(SELECT count(*) FROM notification_tasks WHERE notification_id = $2 AND completed_at IS NOT NULL AND lease_id IS NULL)
+	`, callback.ID, callback.NotificationID).Scan(&eventCount, &completedTaskCount); err != nil {
+		t.Fatalf("query webhook transaction state: %v", err)
+	}
+	if eventCount != 1 || completedTaskCount != 1 {
+		t.Fatalf("webhook event/completed task counts = %d/%d, want 1/1", eventCount, completedTaskCount)
+	}
+	staleResult, err := claimed[0].Notification.MarkSent(callback.ProviderReference, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteTask(ctx, claimed[0].ID, claimed[0].LeaseID, notificationapp.TaskOutcome{Notification: staleResult}, now.Add(time.Second)); !errors.Is(err, notificationapp.ErrTaskLeaseLost) {
+		t.Fatalf("stale worker CompleteTask() error = %v, want lease lost", err)
+	}
+	changed := callback
+	changed.PayloadHash = fmt.Sprintf("%x", sha256.Sum256([]byte(`{"provider_result":"changed"}`)))
+	if _, err := webhooks.Process(ctx, changed); !errors.Is(err, notificationapp.ErrWebhookEventConflict) {
+		t.Fatalf("changed duplicate error = %v, want conflict", err)
 	}
 }
 

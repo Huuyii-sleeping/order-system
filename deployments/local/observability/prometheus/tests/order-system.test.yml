@@ -217,3 +217,28 @@ tests:
             exp_annotations:
               summary: Order System notification reconciliation is failing
               description: Notification provider result lookups have failed during the last five minutes.
+
+  - name: notification-webhook-failures-alert
+    interval: 1m
+    input_series:
+      - series: 'order_system_notification_webhooks_total{outcome="conflict"}'
+        values: '0 1 1 1 1 1'
+      - series: 'order_system_notification_webhooks_total{outcome="invalid_signature"}'
+        values: '0 6 12 18 24 30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: OrderSystemNotificationWebhookProcessingFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Notification provider webhooks cannot be applied
+              description: Signed notification callbacks have failed or conflicted with an existing terminal result during the last five minutes.
+      - eval_time: 4m
+        alertname: OrderSystemNotificationWebhookAuthenticationFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Notification webhook authentication failures are elevated
+              description: More than ten notification callbacks failed signature or timestamp validation during the last five minutes.

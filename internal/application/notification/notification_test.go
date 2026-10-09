@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,110 @@ func TestConsumerCreatesIdempotentNotificationTask(t *testing.T) {
 	second, err := consumer.Consume(context.Background(), message)
 	if err != nil || second.Processed || second.Notification.ID() != first.Notification.ID() {
 		t.Fatalf("duplicate Consume() = %+v, %v", second, err)
+	}
+}
+
+func TestWebhookCompletesNotificationAndTaskIdempotently(t *testing.T) {
+	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
+	store := memory.NewNotificationStore()
+	consumer := notificationapp.NewConsumer(store, &ids{values: []string{"task-1"}}, fixedClock{now: now.Add(-time.Minute)})
+	if _, err := consumer.Consume(context.Background(), requestedMessage(t, "notification-event-1", "notification-1", now.Add(-time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	service := notificationapp.NewWebhookService(store, fixedClock{now: now})
+	claimed, err := store.ClaimTasks(context.Background(), "worker-before-webhook", 1, now.Add(-time.Second), now.Add(time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimTasks() before webhook = %+v, %v", claimed, err)
+	}
+	event := notificationapp.WebhookEvent{
+		ID: "webhook-1", NotificationID: "notification-1", IdempotencyKey: "notification-1",
+		Status: notificationapp.SendSucceeded, ProviderReference: "provider-reference-1",
+		PayloadHash: strings.Repeat("a", 64),
+	}
+
+	first, err := service.Process(context.Background(), event)
+	if err != nil || !first.Processed || first.Notification.Status() != domainnotification.StatusSent {
+		t.Fatalf("first Process() = %+v, %v", first, err)
+	}
+	second, err := service.Process(context.Background(), event)
+	if err != nil || second.Processed || second.Notification.Status() != domainnotification.StatusSent {
+		t.Fatalf("duplicate Process() = %+v, %v", second, err)
+	}
+	staleResult, err := claimed[0].Notification.MarkSent("provider-reference-1", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteTask(context.Background(), claimed[0].ID, claimed[0].LeaseID, notificationapp.TaskOutcome{Notification: staleResult}, now.Add(time.Second)); !errors.Is(err, notificationapp.ErrTaskLeaseLost) {
+		t.Fatalf("stale worker CompleteTask() error = %v, want lease lost", err)
+	}
+	remaining, err := store.ClaimTasks(context.Background(), "lease-after-webhook", 1, now.Add(time.Hour), now.Add(2*time.Hour))
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("ClaimTasks() after webhook = %+v, %v; want no pending task", remaining, err)
+	}
+}
+
+func TestWebhookRejectsChangedDuplicateAndOppositeTerminalResult(t *testing.T) {
+	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
+	store := memory.NewNotificationStore()
+	consumer := notificationapp.NewConsumer(store, &ids{values: []string{"task-1"}}, fixedClock{now: now.Add(-time.Minute)})
+	if _, err := consumer.Consume(context.Background(), requestedMessage(t, "notification-event-1", "notification-1", now.Add(-time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	service := notificationapp.NewWebhookService(store, fixedClock{now: now})
+	succeeded := notificationapp.WebhookEvent{
+		ID: "webhook-1", NotificationID: "notification-1", IdempotencyKey: "notification-1",
+		Status: notificationapp.SendSucceeded, ProviderReference: "provider-reference-1",
+		PayloadHash: strings.Repeat("a", 64),
+	}
+	if _, err := service.Process(context.Background(), succeeded); err != nil {
+		t.Fatal(err)
+	}
+	changed := succeeded
+	changed.PayloadHash = strings.Repeat("b", 64)
+	if _, err := service.Process(context.Background(), changed); !errors.Is(err, notificationapp.ErrWebhookEventConflict) {
+		t.Fatalf("changed duplicate error = %v, want conflict", err)
+	}
+	rejected := notificationapp.WebhookEvent{
+		ID: "webhook-2", NotificationID: "notification-1", IdempotencyKey: "notification-1",
+		Status: notificationapp.SendRejected, Reason: "provider rejected delivery",
+		PayloadHash: strings.Repeat("c", 64),
+	}
+	if _, err := service.Process(context.Background(), rejected); !errors.Is(err, notificationapp.ErrWebhookResultConflict) {
+		t.Fatalf("opposite terminal result error = %v, want conflict", err)
+	}
+	// 冲突事务不会留下“已处理”标记；同一个 event ID 修正为与终态一致的
+	// 内容后仍可正常消费，证明事件记录和状态更新共享事务。
+	corrected := succeeded
+	corrected.ID = rejected.ID
+	corrected.PayloadHash = strings.Repeat("d", 64)
+	if result, err := service.Process(context.Background(), corrected); err != nil || !result.Processed {
+		t.Fatalf("corrected event Process() = %+v, %v", result, err)
+	}
+	got, err := store.GetNotificationByOrderIDAndCustomerID(context.Background(), "order-1", "customer-1")
+	if err != nil || got.Status() != domainnotification.StatusSent {
+		t.Fatalf("notification after conflicts = %+v, %v; want sent", got, err)
+	}
+}
+
+func TestWebhookRejectsMismatchedIdempotencyKey(t *testing.T) {
+	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
+	store := memory.NewNotificationStore()
+	consumer := notificationapp.NewConsumer(store, &ids{values: []string{"task-1"}}, fixedClock{now: now.Add(-time.Minute)})
+	if _, err := consumer.Consume(context.Background(), requestedMessage(t, "notification-event-1", "notification-1", now.Add(-time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	service := notificationapp.NewWebhookService(store, fixedClock{now: now})
+	_, err := service.Process(context.Background(), notificationapp.WebhookEvent{
+		ID: "webhook-1", NotificationID: "notification-1", IdempotencyKey: "different-key",
+		Status: notificationapp.SendSucceeded, ProviderReference: "provider-reference-1",
+		PayloadHash: strings.Repeat("a", 64),
+	})
+	if !errors.Is(err, domainnotification.ErrNotificationNotFound) {
+		t.Fatalf("Process() error = %v, want notification not found", err)
+	}
+	got, err := store.GetNotificationByOrderIDAndCustomerID(context.Background(), "order-1", "customer-1")
+	if err != nil || got.Status() != domainnotification.StatusPending {
+		t.Fatalf("notification = %+v, %v; want pending", got, err)
 	}
 }
 

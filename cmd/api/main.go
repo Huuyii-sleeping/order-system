@@ -147,12 +147,17 @@ func run(logger *slog.Logger) error {
 		services.Auth,
 		services.Orders,
 		httpapi.RouterConfig{
-			Readiness:           services,
-			ReadinessTimeout:    cfg.ReadinessTimeout,
-			MetricsHandler:      metricRegistry.Handler(),
-			PaymentQueries:      services.PaymentQueries,
-			NotificationQueries: services.NotificationQueries,
-			Logger:              logger,
+			Readiness:            services,
+			ReadinessTimeout:     cfg.ReadinessTimeout,
+			MetricsHandler:       metricRegistry.Handler(),
+			PaymentQueries:       services.PaymentQueries,
+			NotificationQueries:  services.NotificationQueries,
+			NotificationWebhooks: services.NotificationWebhooks,
+			NotificationWebhookSecurity: httpapi.NotificationWebhookSecurity{
+				Secret: cfg.NotificationWebhookSecret, Tolerance: cfg.NotificationWebhookTolerance,
+			},
+			NotificationWebhookMetrics: metricRegistry,
+			Logger:                     logger,
 			AuthSecurity: httpapi.AuthSecurityConfig{
 				SecureCookies:  cfg.SecureCookies,
 				LoginLimiter:   services.LoginLimiter,
