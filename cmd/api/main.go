@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"example.com/order-system/internal/adapters/clock"
 	"example.com/order-system/internal/app"
+	authapp "example.com/order-system/internal/application/auth"
 	notificationapp "example.com/order-system/internal/application/notification"
 	outboxapp "example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
@@ -104,7 +106,16 @@ func run(logger *slog.Logger) error {
 			RetryMax: cfg.NotificationRetryMax, ProviderTimeout: cfg.NotificationProviderTimeout,
 		}, metricRegistry,
 	)
-	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+3)
+	credentialCleanupWorker := authapp.NewCleanupWorker(
+		services.Auth,
+		clock.System{},
+		logger,
+		authapp.CleanupWorkerConfig{
+			Interval:  cfg.CredentialCleanupInterval,
+			BatchSize: cfg.CredentialCleanupBatchSize,
+		},
+	)
+	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+4)
 	for index, worker := range outboxWorkers {
 		backgroundTasks = append(backgroundTasks, app.BackgroundTask{
 			Name: fmt.Sprintf("outbox-%d", index+1),
@@ -126,6 +137,13 @@ func run(logger *slog.Logger) error {
 			Name: "notification-worker",
 			Run: func(stopCtx, workCtx context.Context) error {
 				notificationWorker.RunGracefully(stopCtx, workCtx)
+				return nil
+			},
+		},
+		app.BackgroundTask{
+			Name: "auth-credential-cleanup",
+			Run: func(stopCtx, workCtx context.Context) error {
+				credentialCleanupWorker.RunGracefully(stopCtx, workCtx)
 				return nil
 			},
 		},

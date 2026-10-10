@@ -325,3 +325,63 @@ func (s *IdentityStore) RevokeAllSessions(ctx context.Context, userID string) er
 	}
 	return nil
 }
+
+// PruneExpiredCredentials 在一个短事务中各清理一批过期凭证。
+// CTE 先按 expires_at 选出有限数量的主键，再执行 DELETE，避免一次维护任务
+// 因历史积压锁住整张表过久；两张表都使用已有的 expires_at 索引。
+func (s *IdentityStore) PruneExpiredCredentials(
+	ctx context.Context, now time.Time, batchSize int,
+) (sessionsDeleted, refreshTokensDeleted int64, err error) {
+	if batchSize <= 0 {
+		return 0, 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin credential cleanup transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `
+		WITH expired AS (
+			SELECT token_hash
+			FROM sessions
+			WHERE expires_at <= $1
+			ORDER BY expires_at, token_hash
+			LIMIT $2
+		)
+		DELETE FROM sessions
+		WHERE token_hash IN (SELECT token_hash FROM expired)
+	`, now, batchSize)
+	if err != nil {
+		return 0, 0, fmt.Errorf("delete expired sessions: %w", err)
+	}
+	sessionsDeleted, err = result.RowsAffected()
+	if err != nil {
+		return 0, 0, fmt.Errorf("count deleted sessions: %w", err)
+	}
+
+	result, err = tx.ExecContext(ctx, `
+		WITH expired AS (
+			SELECT token_hash
+			FROM refresh_tokens
+			WHERE expires_at <= $1
+			ORDER BY expires_at, token_hash
+			LIMIT $2
+		)
+		DELETE FROM refresh_tokens
+		WHERE token_hash IN (SELECT token_hash FROM expired)
+	`, now, batchSize)
+	if err != nil {
+		return 0, 0, fmt.Errorf("delete expired refresh tokens: %w", err)
+	}
+	refreshTokensDeleted, err = result.RowsAffected()
+	if err != nil {
+		return 0, 0, fmt.Errorf("count deleted refresh tokens: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, 0, fmt.Errorf("commit credential cleanup: %w", err)
+	}
+	return sessionsDeleted, refreshTokensDeleted, nil
+}

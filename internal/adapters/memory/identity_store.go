@@ -198,6 +198,41 @@ func (s *IdentityStore) RevokeAllSessions(ctx context.Context, userID string) er
 	return nil
 }
 
+// PruneExpiredCredentials 按批次删除已经过期的凭证，模拟数据库维护任务的有界工作量。
+// 生产 PostgreSQL 实现会依赖 expires_at 索引；内存实现保持相同的端口语义，便于测试。
+func (s *IdentityStore) PruneExpiredCredentials(
+	ctx context.Context, now time.Time, batchSize int,
+) (sessionsDeleted, refreshTokensDeleted int64, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	if batchSize <= 0 {
+		return 0, 0, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tokenHash, session := range s.sessionsByTokenHash {
+		if sessionsDeleted >= int64(batchSize) {
+			break
+		}
+		if !session.ExpiresAt().After(now) {
+			delete(s.sessionsByTokenHash, tokenHash)
+			sessionsDeleted++
+		}
+	}
+	for tokenHash, token := range s.refreshByTokenHash {
+		if refreshTokensDeleted >= int64(batchSize) {
+			break
+		}
+		if !token.ExpiresAt().After(now) {
+			delete(s.refreshByTokenHash, tokenHash)
+			refreshTokensDeleted++
+		}
+	}
+	return sessionsDeleted, refreshTokensDeleted, nil
+}
+
 func (s *IdentityStore) revokeFamilyLocked(familyID string, at time.Time) {
 	for tokenHash, session := range s.sessionsByTokenHash {
 		if session.FamilyID() == familyID {

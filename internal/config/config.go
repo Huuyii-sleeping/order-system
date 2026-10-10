@@ -45,13 +45,15 @@ type Config struct {
 	KafkaConsumerMaxAttempts int
 	KafkaConsumerRetry       time.Duration
 
-	AccessTokenTTL   time.Duration
-	RefreshTokenTTL  time.Duration
-	SecureCookies    bool
-	AuthRateWindow   time.Duration
-	LoginRateLimit   int
-	RefreshRateLimit int
-	BcryptCost       int
+	AccessTokenTTL             time.Duration
+	RefreshTokenTTL            time.Duration
+	CredentialCleanupInterval  time.Duration
+	CredentialCleanupBatchSize int
+	SecureCookies              bool
+	AuthRateWindow             time.Duration
+	LoginRateLimit             int
+	RefreshRateLimit           int
+	BcryptCost                 int
 
 	OutboxPollInterval  time.Duration
 	OutboxBatchSize     int
@@ -111,6 +113,8 @@ func Load() (Config, error) {
 		KafkaConsumerRetry:             time.Second,
 		AccessTokenTTL:                 15 * time.Minute,
 		RefreshTokenTTL:                30 * 24 * time.Hour,
+		CredentialCleanupInterval:      time.Hour,
+		CredentialCleanupBatchSize:     500,
 		SecureCookies:                  false,
 		AuthRateWindow:                 time.Minute,
 		LoginRateLimit:                 10,
@@ -196,6 +200,7 @@ func Load() (Config, error) {
 		{name: "CATALOG_LOAD_TIMEOUT", target: &cfg.CatalogLoadTimeout},
 		{name: "ACCESS_TOKEN_TTL", target: &cfg.AccessTokenTTL},
 		{name: "REFRESH_TOKEN_TTL", target: &cfg.RefreshTokenTTL},
+		{name: "AUTH_CREDENTIAL_CLEANUP_INTERVAL", target: &cfg.CredentialCleanupInterval},
 		{name: "AUTH_RATE_WINDOW", target: &cfg.AuthRateWindow},
 		{name: "OUTBOX_POLL_INTERVAL", target: &cfg.OutboxPollInterval},
 		{name: "OUTBOX_LEASE_DURATION", target: &cfg.OutboxLeaseDuration},
@@ -235,6 +240,13 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.RefreshRateLimit = refreshRateLimit
+	credentialCleanupBatchSize, err := loadPositiveInt(
+		"AUTH_CREDENTIAL_CLEANUP_BATCH_SIZE", cfg.CredentialCleanupBatchSize,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.CredentialCleanupBatchSize = credentialCleanupBatchSize
 	outboxBatchSize, err := loadPositiveInt("OUTBOX_BATCH_SIZE", cfg.OutboxBatchSize)
 	if err != nil {
 		return Config{}, err

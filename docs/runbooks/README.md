@@ -8,3 +8,4 @@
   的启动、验收和故障模拟。
 - [`graceful-shutdown.md`](graceful-shutdown.md)：SIGTERM、readiness 排水和在途工作关闭演练。
 - [`notification-delivery.md`](notification-delivery.md)：通知任务、Provider 故障模拟、状态查询和排查顺序。
+- [`auth-credential-cleanup.md`](auth-credential-cleanup.md)：过期 Session/Refresh Token 的批量清理、故障排查和关闭行为。

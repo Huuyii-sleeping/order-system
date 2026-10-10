@@ -257,6 +257,12 @@ curl -i -X POST http://127.0.0.1:8080/auth/refresh \
 每次刷新都会轮换 Refresh Token。旧 Refresh Token 再次使用会被识别为重放，
 并撤销同一个凭证家族中的 Access Session 和 Refresh Token。
 
+过期的 Access Session 和 Refresh Token 不会只依赖查询时的逻辑过滤。服务还会启动
+`auth-credential-cleanup` 维护 Worker，按 `AUTH_CREDENTIAL_CLEANUP_INTERVAL` 和
+`AUTH_CREDENTIAL_CLEANUP_BATCH_SIZE` 分批物理回收历史凭证；数据库模式依赖已有的
+`expires_at` 索引。故障排查和关闭行为见
+[`docs/runbooks/auth-credential-cleanup.md`](docs/runbooks/auth-credential-cleanup.md)。
+
 登录和刷新接口默认按客户端连接地址进行单实例限流，超限返回
 `429 Too Many Requests` 和 `Retry-After`。HTTPS 部署必须将
 `SECURE_COOKIES` 设置为 `true`，本地 HTTP 开发保持 `false`。

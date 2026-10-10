@@ -97,6 +97,7 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/application/outbox/`：提供 Outbox 消息契约、租约认领、重试和 Worker 生命周期。
 - `internal/application/payment/`：提供 Inbox 消费幂等、支付查询、支付任务和有界并发 Worker。
 - `internal/application/notification/`：提供通知事件 Inbox 幂等、通知查询、任务租约、Provider 超时、稳定幂等键、查询对账、Webhook 回调消费和重试 Worker。
+- `internal/application/auth/`：提供注册、登录、凭证轮换，以及独立的过期认证凭证清理维护 Worker。
 - `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API；订单列表只使用认证身份并限制分页参数，通知 Webhook 则使用独立的 HMAC 机器认证。
 - `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程、HTTP 请求
   和 Kafka 消费指标。

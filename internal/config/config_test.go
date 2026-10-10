@@ -34,6 +34,8 @@ func TestLoad(t *testing.T) {
 		catalogLoadTimeout                  string
 		accessTokenTTL                      string
 		refreshTokenTTL                     string
+		credentialCleanupInterval           string
+		credentialCleanupBatchSize          string
 		secureCookies                       string
 		authRateWindow                      string
 		loginRateLimit                      string
@@ -84,28 +86,30 @@ func TestLoad(t *testing.T) {
 			httpAddr:        "",
 			shutdownTimeout: "",
 			want: config.Config{
-				AppName:              "order-system",
-				HTTPAddr:             ":8080",
-				ShutdownTimeout:      10 * time.Second,
-				ShutdownDrainDelay:   2 * time.Second,
-				ReadinessTimeout:     2 * time.Second,
-				StorageDriver:        config.StorageMemory,
-				AccessTokenTTL:       15 * time.Minute,
-				RefreshTokenTTL:      30 * 24 * time.Hour,
-				AuthRateWindow:       time.Minute,
-				LoginRateLimit:       10,
-				RefreshRateLimit:     30,
-				BcryptCost:           12,
-				OutboxPollInterval:   time.Second,
-				OutboxBatchSize:      20,
-				OutboxLeaseDuration:  30 * time.Second,
-				OutboxRetryBase:      time.Second,
-				OutboxRetryMax:       time.Minute,
-				PaymentPollInterval:  time.Second,
-				PaymentBatchSize:     10,
-				PaymentLeaseDuration: 30 * time.Second,
-				PaymentRetryBase:     time.Second,
-				PaymentRetryMax:      time.Minute,
+				AppName:                    "order-system",
+				HTTPAddr:                   ":8080",
+				ShutdownTimeout:            10 * time.Second,
+				ShutdownDrainDelay:         2 * time.Second,
+				ReadinessTimeout:           2 * time.Second,
+				StorageDriver:              config.StorageMemory,
+				AccessTokenTTL:             15 * time.Minute,
+				RefreshTokenTTL:            30 * 24 * time.Hour,
+				CredentialCleanupInterval:  time.Hour,
+				CredentialCleanupBatchSize: 500,
+				AuthRateWindow:             time.Minute,
+				LoginRateLimit:             10,
+				RefreshRateLimit:           30,
+				BcryptCost:                 12,
+				OutboxPollInterval:         time.Second,
+				OutboxBatchSize:            20,
+				OutboxLeaseDuration:        30 * time.Second,
+				OutboxRetryBase:            time.Second,
+				OutboxRetryMax:             time.Minute,
+				PaymentPollInterval:        time.Second,
+				PaymentBatchSize:           10,
+				PaymentLeaseDuration:       30 * time.Second,
+				PaymentRetryBase:           time.Second,
+				PaymentRetryMax:            time.Minute,
 			},
 		},
 		{
@@ -135,6 +139,23 @@ func TestLoad(t *testing.T) {
 				PaymentLeaseDuration: 30 * time.Second,
 				PaymentRetryBase:     time.Second,
 				PaymentRetryMax:      time.Minute,
+			},
+		},
+		{
+			name:                       "environment variables override credential cleanup",
+			credentialCleanupInterval:  "15m",
+			credentialCleanupBatchSize: "75",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				ShutdownTimeout: 10 * time.Second, ShutdownDrainDelay: 2 * time.Second,
+				ReadinessTimeout: 2 * time.Second, StorageDriver: config.StorageMemory,
+				AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 30 * 24 * time.Hour,
+				CredentialCleanupInterval: 15 * time.Minute, CredentialCleanupBatchSize: 75,
+				AuthRateWindow: time.Minute, LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second, OutboxRetryMax: time.Minute,
+				PaymentPollInterval: time.Second, PaymentBatchSize: 10, PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
 			},
 		},
 		{
@@ -373,6 +394,16 @@ func TestLoad(t *testing.T) {
 			wantErrorContains: "READINESS_TIMEOUT",
 		},
 		{
+			name:                      "rejects zero credential cleanup interval",
+			credentialCleanupInterval: "0s",
+			wantErrorContains:         "AUTH_CREDENTIAL_CLEANUP_INTERVAL",
+		},
+		{
+			name:                       "rejects zero credential cleanup batch size",
+			credentialCleanupBatchSize: "0",
+			wantErrorContains:          "AUTH_CREDENTIAL_CLEANUP_BATCH_SIZE",
+		},
+		{
 			name: "rejects drain delay equal to shutdown timeout", shutdownDrainDelay: "10s",
 			wantErrorContains: "SHUTDOWN_DRAIN_DELAY must be less than SHUTDOWN_TIMEOUT",
 		},
@@ -543,6 +574,8 @@ func TestLoad(t *testing.T) {
 			t.Setenv("CATALOG_LOAD_TIMEOUT", tt.catalogLoadTimeout)
 			t.Setenv("ACCESS_TOKEN_TTL", tt.accessTokenTTL)
 			t.Setenv("REFRESH_TOKEN_TTL", tt.refreshTokenTTL)
+			t.Setenv("AUTH_CREDENTIAL_CLEANUP_INTERVAL", tt.credentialCleanupInterval)
+			t.Setenv("AUTH_CREDENTIAL_CLEANUP_BATCH_SIZE", tt.credentialCleanupBatchSize)
 			t.Setenv("SECURE_COOKIES", tt.secureCookies)
 			t.Setenv("AUTH_RATE_WINDOW", tt.authRateWindow)
 			t.Setenv("LOGIN_RATE_LIMIT", tt.loginRateLimit)
@@ -672,6 +705,12 @@ func TestLoad(t *testing.T) {
 			}
 			if want.NotificationWebhookTolerance == 0 {
 				want.NotificationWebhookTolerance = 5 * time.Minute
+			}
+			if want.CredentialCleanupInterval == 0 {
+				want.CredentialCleanupInterval = time.Hour
+			}
+			if want.CredentialCleanupBatchSize == 0 {
+				want.CredentialCleanupBatchSize = 500
 			}
 			if got != want {
 				t.Errorf("Load() = %+v, want %+v", got, want)

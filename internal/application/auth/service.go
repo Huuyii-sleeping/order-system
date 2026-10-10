@@ -35,6 +35,7 @@ type Store interface {
 	RotateRefreshToken(context.Context, string, time.Time, identity.Session, identity.RefreshToken) error
 	RevokeSession(context.Context, string) error
 	RevokeAllSessions(context.Context, string) error
+	PruneExpiredCredentials(context.Context, time.Time, int) (sessionsDeleted, refreshTokensDeleted int64, err error)
 }
 
 type PasswordHasher interface {
@@ -52,6 +53,13 @@ type TokenGenerator interface {
 
 type Clock interface {
 	Now() time.Time
+}
+
+// CleanupResult 是一次凭证维护批次的结果。删除数量用于日志、指标和运行手册中的验收，
+// 不把 token hash 或用户身份暴露到维护日志里。
+type CleanupResult struct {
+	SessionsDeleted      int64
+	RefreshTokensDeleted int64
 }
 
 type Service struct {
@@ -297,6 +305,27 @@ func (s *Service) LogoutAll(ctx context.Context, userID string) error {
 		return fmt.Errorf("revoke all sessions: %w", err)
 	}
 	return nil
+}
+
+// PruneExpiredCredentials 负责认证凭证的物理回收。
+//
+// 认证请求只需要“逻辑上忽略已过期凭证”，但数据库中的旧记录仍会持续占用空间，
+// 也会让索引和备份不断增长。因此清理作为独立维护用例，由后台 Worker 周期调用。
+func (s *Service) PruneExpiredCredentials(
+	ctx context.Context, now time.Time, batchSize int,
+) (CleanupResult, error) {
+	if s == nil || s.store == nil {
+		return CleanupResult{}, errors.New("auth service is not configured")
+	}
+
+	sessionsDeleted, refreshTokensDeleted, err := s.store.PruneExpiredCredentials(ctx, now, batchSize)
+	if err != nil {
+		return CleanupResult{}, fmt.Errorf("prune expired credentials: %w", err)
+	}
+	return CleanupResult{
+		SessionsDeleted:      sessionsDeleted,
+		RefreshTokensDeleted: refreshTokensDeleted,
+	}, nil
 }
 
 func validatePassword(password string) error {

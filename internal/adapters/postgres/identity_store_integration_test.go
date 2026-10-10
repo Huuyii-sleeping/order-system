@@ -91,6 +91,76 @@ func TestIntegrationIdentityStore(t *testing.T) {
 		}
 	})
 
+	t.Run("prunes expired credentials in bounded batches", func(t *testing.T) {
+		expiredSession, err := identity.NewSession(
+			"1212121212121212121212121212121212121212121212121212121212121212",
+			user.ID(), now.Add(-2*time.Hour), now.Add(-time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create expired session: %v", err)
+		}
+		activeSession, err := identity.NewSession(
+			"1313131313131313131313131313131313131313131313131313131313131313",
+			user.ID(), now, now.Add(time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create active session: %v", err)
+		}
+		expiredRefresh, err := identity.NewRefreshToken(
+			"1414141414141414141414141414141414141414141414141414141414141414",
+			user.ID(), "cleanup-family-expired", now.Add(-2*time.Hour), now.Add(-time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create expired refresh token: %v", err)
+		}
+		activeRefresh, err := identity.NewRefreshToken(
+			"1515151515151515151515151515151515151515151515151515151515151515",
+			user.ID(), "cleanup-family-active", now, now.Add(time.Hour),
+		)
+		if err != nil {
+			t.Fatalf("create active refresh token: %v", err)
+		}
+		if err := store.CreateSession(ctx, expiredSession); err != nil {
+			t.Fatalf("CreateSession(expired) error = %v", err)
+		}
+		if err := store.CreateSession(ctx, activeSession); err != nil {
+			t.Fatalf("CreateSession(active) error = %v", err)
+		}
+		if err := store.CreateRefreshToken(ctx, expiredRefresh); err != nil {
+			t.Fatalf("CreateRefreshToken(expired) error = %v", err)
+		}
+		if err := store.CreateRefreshToken(ctx, activeRefresh); err != nil {
+			t.Fatalf("CreateRefreshToken(active) error = %v", err)
+		}
+
+		sessionsDeleted, refreshTokensDeleted, err := store.PruneExpiredCredentials(ctx, now, 1)
+		if err != nil {
+			t.Fatalf("first PruneExpiredCredentials() error = %v", err)
+		}
+		if sessionsDeleted != 1 || refreshTokensDeleted != 1 {
+			t.Fatalf("first deleted counts = %d, %d; want one of each", sessionsDeleted, refreshTokensDeleted)
+		}
+		secondSessionsDeleted, secondRefreshTokensDeleted, err := store.PruneExpiredCredentials(ctx, now, 1)
+		if err != nil {
+			t.Fatalf("second PruneExpiredCredentials() error = %v", err)
+		}
+		if secondSessionsDeleted != 0 || secondRefreshTokensDeleted != 0 {
+			t.Fatalf("second deleted counts = %d, %d; want zero", secondSessionsDeleted, secondRefreshTokensDeleted)
+		}
+		if _, err := store.GetSessionByTokenHash(ctx, expiredSession.TokenHash(), now); !errors.Is(err, identity.ErrSessionNotFound) {
+			t.Fatalf("expired session lookup error = %v, want not found", err)
+		}
+		if _, err := store.GetSessionByTokenHash(ctx, activeSession.TokenHash(), now); err != nil {
+			t.Fatalf("active session lookup error = %v", err)
+		}
+		if _, err := store.GetRefreshTokenByHash(ctx, expiredRefresh.TokenHash()); !errors.Is(err, identity.ErrRefreshTokenNotFound) {
+			t.Fatalf("expired refresh lookup error = %v, want not found", err)
+		}
+		if _, err := store.GetRefreshTokenByHash(ctx, activeRefresh.TokenHash()); err != nil {
+			t.Fatalf("active refresh lookup error = %v", err)
+		}
+	})
+
 	t.Run("revokes one session or all user sessions", func(t *testing.T) {
 		first, err := identity.NewSession(
 			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

@@ -17,3 +17,4 @@
 - [`0017-provider-reconciliation.md`](0017-provider-reconciliation.md)：通过 Provider 查询对账收敛超时和 Worker 崩溃造成的不确定结果。
 - [`0018-notification-provider-webhook.md`](0018-notification-provider-webhook.md)：通过 HMAC Webhook 与持久化事件幂等主动收敛通知结果。
 - [`0019-order-keyset-pagination.md`](0019-order-keyset-pagination.md)：订单历史使用复合游标、Keyset Pagination 和匹配查询形状的索引。
+- [`0020-expired-credential-cleanup.md`](0020-expired-credential-cleanup.md)：过期认证凭证使用有界批量删除和独立维护 Worker 回收。
