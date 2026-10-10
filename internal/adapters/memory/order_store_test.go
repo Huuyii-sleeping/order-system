@@ -236,6 +236,46 @@ func TestOrderStoreHidesOrderFromAnotherCustomer(t *testing.T) {
 	}
 }
 
+func TestOrderStoreListsOrdersByStableCursorBoundary(t *testing.T) {
+	store := mustOrderStore(t, 5)
+	sharedTime := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
+	fixtures := []order.Order{
+		mustStoredOrderForCustomerAt(t, "order-new", "customer-1", "key-new", sharedTime.Add(time.Second)),
+		mustStoredOrderForCustomerAt(t, "order-c", "customer-1", "key-c", sharedTime),
+		mustStoredOrderForCustomerAt(t, "order-b", "customer-1", "key-b", sharedTime),
+		mustStoredOrderForCustomerAt(t, "order-a", "customer-1", "key-a", sharedTime),
+		mustStoredOrderForCustomerAt(t, "other-order", "customer-2", "other-key", sharedTime.Add(time.Hour)),
+	}
+	if err := store.Transact(context.Background(), func(tx orderapp.Transaction) error {
+		for _, fixture := range fixtures {
+			if err := tx.SaveOrder(fixture); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed orders: %v", err)
+	}
+
+	first, err := store.ListOrdersByCustomerID(context.Background(), "customer-1", nil, 2)
+	if err != nil {
+		t.Fatalf("first ListOrdersByCustomerID() error = %v", err)
+	}
+	if got := orderIDs(first); fmt.Sprint(got) != "[order-new order-c]" {
+		t.Fatalf("first page IDs = %v", got)
+	}
+
+	second, err := store.ListOrdersByCustomerID(context.Background(), "customer-1", &orderapp.PageBoundary{
+		CreatedAt: first[1].CreatedAt(), OrderID: first[1].ID(),
+	}, 2)
+	if err != nil {
+		t.Fatalf("second ListOrdersByCustomerID() error = %v", err)
+	}
+	if got := orderIDs(second); fmt.Sprint(got) != "[order-b order-a]" {
+		t.Fatalf("second page IDs = %v", got)
+	}
+}
+
 func TestIdempotencyKeyIsScopedToCustomer(t *testing.T) {
 	store := mustOrderStore(t, 5)
 	service := newOrderService(t, store)
@@ -308,20 +348,34 @@ func availableStock(t *testing.T, store *memory.OrderStore) int {
 }
 
 func mustStoredOrder(t *testing.T, orderID, idempotencyKey string) order.Order {
+	return mustStoredOrderForCustomerAt(t, orderID, "customer-1", idempotencyKey, time.Now())
+}
+
+func mustStoredOrderForCustomerAt(
+	t *testing.T, orderID, customerID, idempotencyKey string, createdAt time.Time,
+) order.Order {
 	t.Helper()
 	created, err := order.New(
 		orderID,
-		"customer-1",
+		customerID,
 		"product-1",
 		1,
 		12900,
 		idempotencyKey,
-		time.Now(),
+		createdAt,
 	)
 	if err != nil {
 		t.Fatalf("create order fixture: %v", err)
 	}
 	return created
+}
+
+func orderIDs(orders []order.Order) []string {
+	ids := make([]string, 0, len(orders))
+	for _, current := range orders {
+		ids = append(ids, current.ID())
+	}
+	return ids
 }
 
 func mustOutboxMessage(t *testing.T, messageID, orderID string) outbox.Message {

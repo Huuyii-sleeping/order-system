@@ -42,6 +42,7 @@ type Transaction interface {
 type Store interface {
 	Transact(context.Context, func(Transaction) error) error
 	GetOrderByIDAndCustomerID(context.Context, string, string) (order.Order, error)
+	ListOrdersByCustomerID(context.Context, string, *PageBoundary, int) ([]order.Order, error)
 }
 
 type IDGenerator interface {

@@ -22,7 +22,11 @@ type orderUseCasesStub struct {
 	createErr     error
 	getResult     order.Order
 	getErr        error
+	listResult    orderapp.ListOrdersResult
+	listErr       error
 	createCommand orderapp.CreateOrderCommand
+	listQuery     orderapp.ListOrdersQuery
+	listCalled    bool
 	getCustomerID string
 	getOrderID    string
 }
@@ -36,6 +40,12 @@ func (s *orderUseCasesStub) GetOrder(_ context.Context, customerID, orderID stri
 	s.getCustomerID = customerID
 	s.getOrderID = orderID
 	return s.getResult, s.getErr
+}
+
+func (s *orderUseCasesStub) ListOrders(_ context.Context, query orderapp.ListOrdersQuery) (orderapp.ListOrdersResult, error) {
+	s.listCalled = true
+	s.listQuery = query
+	return s.listResult, s.listErr
 }
 
 func TestCreateOrderReturnsCreatedOrder(t *testing.T) {
@@ -194,6 +204,89 @@ func TestGetOrderReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestListOrdersUsesAuthenticatedCustomerAndReturnsCursor(t *testing.T) {
+	useCases := &orderUseCasesStub{listResult: orderapp.ListOrdersResult{
+		Orders: []order.Order{
+			mustHTTPOrderWith(t, "order-2", time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)),
+			mustHTTPOrderWith(t, "order-1", time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)),
+		},
+		NextCursor: "next-page-token",
+	}}
+	request := httptest.NewRequest(http.MethodGet, "/orders?limit=2&cursor=current-page-token", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if useCases.listQuery.CustomerID != "customer-1" || useCases.listQuery.Limit != 2 ||
+		useCases.listQuery.Cursor != "current-page-token" {
+		t.Errorf("ListOrders() query = %+v", useCases.listQuery)
+	}
+	var body struct {
+		Items      []orderResponseFixture `json:"items"`
+		NextCursor string                 `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Items) != 2 || body.Items[0].ID != "order-2" || body.NextCursor != "next-page-token" {
+		t.Errorf("response body = %+v", body)
+	}
+}
+
+func TestListOrdersRejectsInvalidLimitBeforeCallingUseCase(t *testing.T) {
+	for _, query := range []string{
+		"?limit=0", "?limit=101", "?limit=abc", "?limit=1&limit=2", "?customer_id=attacker",
+	} {
+		t.Run(query, func(t *testing.T) {
+			useCases := &orderUseCasesStub{}
+			request := httptest.NewRequest(http.MethodGet, "/orders"+query, nil)
+			request.Header.Set("Authorization", "Bearer valid-token")
+			response := httptest.NewRecorder()
+
+			httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status code = %d, want %d", response.Code, http.StatusBadRequest)
+			}
+			if useCases.listCalled {
+				t.Fatal("invalid HTTP query must not call use case")
+			}
+		})
+	}
+}
+
+func TestListOrdersMapsApplicationErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{name: "invalid cursor", err: orderapp.ErrInvalidListCursor, wantStatus: http.StatusBadRequest},
+		{name: "internal", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			useCases := &orderUseCasesStub{listErr: tt.err}
+			request := httptest.NewRequest(http.MethodGet, "/orders?cursor=opaque", nil)
+			request.Header.Set("Authorization", "Bearer valid-token")
+			response := httptest.NewRecorder()
+
+			httpapi.NewRouter(catalogQueriesStub{}, authenticatedAs("customer-1"), useCases).ServeHTTP(response, request)
+
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status code = %d, want %d", response.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+type orderResponseFixture struct {
+	ID string `json:"id"`
+}
+
 func validCreateOrderRequest() *http.Request {
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -207,15 +300,19 @@ func validCreateOrderRequest() *http.Request {
 }
 
 func mustHTTPOrder(t *testing.T) order.Order {
+	return mustHTTPOrderWith(t, "order-1", time.Date(2026, 9, 27, 8, 0, 0, 0, time.UTC))
+}
+
+func mustHTTPOrderWith(t *testing.T, orderID string, createdAt time.Time) order.Order {
 	t.Helper()
 	created, err := order.New(
-		"order-1",
+		orderID,
 		"customer-1",
 		"product-1",
 		2,
 		12900,
 		"key-1",
-		time.Date(2026, 9, 27, 8, 0, 0, 0, time.UTC),
+		createdAt,
 	)
 	if err != nil {
 		t.Fatalf("create order fixture: %v", err)

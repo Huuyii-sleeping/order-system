@@ -28,8 +28,13 @@ type storeStub struct {
 	order      order.Order
 	err        error
 	transact   bool
+	listCalled bool
 	orderID    string
 	customerID string
+	listOrders []order.Order
+	listErr    error
+	listAfter  *orderapp.PageBoundary
+	listLimit  int
 }
 
 func (s *storeStub) Transact(ctx context.Context, fn func(orderapp.Transaction) error) error {
@@ -48,6 +53,16 @@ func (s *storeStub) GetOrderByIDAndCustomerID(_ context.Context, orderID, custom
 	s.orderID = orderID
 	s.customerID = customerID
 	return s.order, s.err
+}
+
+func (s *storeStub) ListOrdersByCustomerID(
+	_ context.Context, customerID string, after *orderapp.PageBoundary, limit int,
+) ([]order.Order, error) {
+	s.listCalled = true
+	s.customerID = customerID
+	s.listAfter = after
+	s.listLimit = limit
+	return s.listOrders, s.listErr
 }
 
 type transactionStub struct {
@@ -279,6 +294,83 @@ func TestGetOrderScopesQueryToAuthenticatedCustomer(t *testing.T) {
 	}
 }
 
+func TestListOrdersCreatesAndConsumesStableCursor(t *testing.T) {
+	sharedTime := time.Date(2026, 10, 10, 8, 0, 0, 123, time.UTC)
+	store := &storeStub{listOrders: []order.Order{
+		mustOrderAt(t, "order-3", "customer-1", sharedTime),
+		mustOrderAt(t, "order-2", "customer-1", sharedTime),
+		mustOrderAt(t, "order-1", "customer-1", sharedTime.Add(-time.Second)),
+	}}
+	service := orderapp.NewService(productCatalogStub{}, store, idGeneratorStub{}, clockStub{})
+
+	first, err := service.ListOrders(context.Background(), orderapp.ListOrdersQuery{
+		CustomerID: " customer-1 ", Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("ListOrders() error = %v", err)
+	}
+	if len(first.Orders) != 2 || first.Orders[0].ID() != "order-3" ||
+		first.Orders[1].ID() != "order-2" || first.NextCursor == "" {
+		t.Fatalf("first page = %+v", first)
+	}
+	if store.customerID != "customer-1" || store.listLimit != 3 || store.listAfter != nil {
+		t.Errorf("first store query = customer %q, limit %d, after %+v", store.customerID, store.listLimit, store.listAfter)
+	}
+
+	store.listOrders = []order.Order{mustOrderAt(t, "order-1", "customer-1", sharedTime.Add(-time.Second))}
+	second, err := service.ListOrders(context.Background(), orderapp.ListOrdersQuery{
+		CustomerID: "customer-1", Limit: 2, Cursor: first.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("second ListOrders() error = %v", err)
+	}
+	if len(second.Orders) != 1 || second.Orders[0].ID() != "order-1" || second.NextCursor != "" {
+		t.Fatalf("second page = %+v", second)
+	}
+	if store.listAfter == nil || !store.listAfter.CreatedAt.Equal(sharedTime) ||
+		store.listAfter.OrderID != "order-2" {
+		t.Errorf("decoded cursor boundary = %+v", store.listAfter)
+	}
+}
+
+func TestListOrdersValidatesLimitAndCursorBeforeStore(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		query orderapp.ListOrdersQuery
+		want  error
+	}{
+		{name: "negative limit", query: orderapp.ListOrdersQuery{CustomerID: "customer-1", Limit: -1}, want: orderapp.ErrInvalidListLimit},
+		{name: "too large limit", query: orderapp.ListOrdersQuery{CustomerID: "customer-1", Limit: 101}, want: orderapp.ErrInvalidListLimit},
+		{name: "invalid cursor", query: orderapp.ListOrdersQuery{CustomerID: "customer-1", Limit: 20, Cursor: "not-base64!"}, want: orderapp.ErrInvalidListCursor},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &storeStub{}
+			service := orderapp.NewService(productCatalogStub{}, store, idGeneratorStub{}, clockStub{})
+
+			_, err := service.ListOrders(context.Background(), tt.query)
+
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("ListOrders() error = %v, want %v", err, tt.want)
+			}
+			if store.listCalled {
+				t.Fatal("invalid query must not call store")
+			}
+		})
+	}
+}
+
+func TestListOrdersUsesDefaultLimit(t *testing.T) {
+	store := &storeStub{}
+	service := orderapp.NewService(productCatalogStub{}, store, idGeneratorStub{}, clockStub{})
+
+	if _, err := service.ListOrders(context.Background(), orderapp.ListOrdersQuery{CustomerID: "customer-1"}); err != nil {
+		t.Fatalf("ListOrders() error = %v", err)
+	}
+	if store.listLimit != orderapp.DefaultListLimit+1 {
+		t.Errorf("store limit = %d, want %d", store.listLimit, orderapp.DefaultListLimit+1)
+	}
+}
+
 func mustProduct(t *testing.T, priceCents int64) catalog.Product {
 	t.Helper()
 	product, err := catalog.NewProduct("product-1", "Keyboard", priceCents)
@@ -307,6 +399,23 @@ func mustOrder(t *testing.T, idempotencyKey string, quantity int) order.Order {
 		12900,
 		idempotencyKey,
 		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("create order fixture: %v", err)
+	}
+	return created
+}
+
+func mustOrderAt(t *testing.T, orderID, customerID string, createdAt time.Time) order.Order {
+	t.Helper()
+	created, err := order.New(
+		orderID,
+		customerID,
+		"product-1",
+		1,
+		12900,
+		"key-"+orderID,
+		createdAt,
 	)
 	if err != nil {
 		t.Fatalf("create order fixture: %v", err)

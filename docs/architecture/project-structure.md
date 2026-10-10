@@ -84,7 +84,7 @@ app 负责把 domain、application、adapters、transport 组装起来。
 ## 当前实现状态
 
 - `internal/domain/`：已经包含用户、会话、商品、库存和订单领域模型。
-- `internal/application/`：已经包含注册登录、商品查询、事务下单、可靠事件、支付任务、
+- `internal/application/`：已经包含注册登录、商品查询、事务下单、订单历史游标分页、可靠事件、支付任务、
   支付结果驱动的订单确认或库存补偿，以及通知 Inbox/Task/Provider 投递用例。
 - `internal/application/event/`：保存生产者与消费者共同依赖的版本化集成事件契约。
 - `internal/adapters/memory/`：提供默认的进程内存实现。
@@ -97,7 +97,7 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/application/outbox/`：提供 Outbox 消息契约、租约认领、重试和 Worker 生命周期。
 - `internal/application/payment/`：提供 Inbox 消费幂等、支付查询、支付任务和有界并发 Worker。
 - `internal/application/notification/`：提供通知事件 Inbox 幂等、通知查询、任务租约、Provider 超时、稳定幂等键、查询对账、Webhook 回调消费和重试 Worker。
-- `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API；认证中间件处理用户身份，通知 Webhook 则使用独立的 HMAC 机器认证。
+- `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API；订单列表只使用认证身份并限制分页参数，通知 Webhook 则使用独立的 HMAC 机器认证。
 - `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程、HTTP 请求
   和 Kafka 消费指标。
 - `internal/platform/telemetry/`：初始化 OpenTelemetry，并用 W3C Trace Context 串联 HTTP、

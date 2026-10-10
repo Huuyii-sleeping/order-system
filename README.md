@@ -183,6 +183,21 @@ curl http://127.0.0.1:8080/orders/<order-id> \
   -H 'Authorization: Bearer <access-token>'
 ```
 
+按创建时间倒序分页读取自己的订单历史：
+
+```bash
+curl 'http://127.0.0.1:8080/orders?limit=20' \
+  -H 'Authorization: Bearer <access-token>'
+
+curl 'http://127.0.0.1:8080/orders?limit=20&cursor=<next-cursor>' \
+  -H 'Authorization: Bearer <access-token>'
+```
+
+列表使用 `(created_at DESC, id DESC)` 复合游标，而不是深分页 `OFFSET`。响应中的
+`next_cursor` 为空表示已经到达最后一页；它只是查询位置，不是认证凭据，客户端应当
+原样回传而不解析。服务始终从 Access Token 获取用户身份，因此不能用查询参数读取
+其他用户的订单。
+
 订单创建后，支付会由消息消费者和后台 Worker 异步处理。使用同一个 Bearer Token
 查询当前用户订单对应的支付结果：
 

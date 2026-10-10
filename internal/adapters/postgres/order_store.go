@@ -88,6 +88,50 @@ func (s *OrderStore) GetOrderByIDAndCustomerID(
 	return got, nil
 }
 
+func (s *OrderStore) ListOrdersByCustomerID(
+	ctx context.Context,
+	customerID string,
+	after *orderapp.PageBoundary,
+	limit int,
+) ([]order.Order, error) {
+	if limit <= 0 {
+		return nil, orderapp.ErrInvalidListLimit
+	}
+
+	query := orderSelect + `
+		WHERE customer_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`
+	arguments := []any{customerID, limit}
+	if after != nil {
+		query = orderSelect + `
+			WHERE customer_id = $1
+			  AND (created_at, id) < ($2, $3)
+			ORDER BY created_at DESC, id DESC
+			LIMIT $4`
+		arguments = []any{customerID, after.CreatedAt, after.OrderID, limit}
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("query orders by customer: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	orders := make([]order.Order, 0, limit)
+	for rows.Next() {
+		current, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan customer order: %w", err)
+		}
+		orders = append(orders, current)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate customer orders: %w", err)
+	}
+	return orders, nil
+}
+
 type orderTransaction struct {
 	ctx context.Context
 	tx  *sql.Tx

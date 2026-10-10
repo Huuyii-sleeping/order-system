@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -73,6 +74,8 @@ func TestIntegrationPostgresTransactionConcurrencyAndIdempotency(t *testing.T) {
 		"idempotent-customer",
 		"scoped-customer-a",
 		"scoped-customer-b",
+		"pagination-customer",
+		"pagination-other-customer",
 	)
 
 	t.Run("rolls back stock change when transaction fails", func(t *testing.T) {
@@ -262,6 +265,51 @@ func TestIntegrationPostgresTransactionConcurrencyAndIdempotency(t *testing.T) {
 			t.Fatalf("cross-customer GetOrder() error = %v, want not found", err)
 		}
 	})
+
+	t.Run("lists customer orders with stable keyset pagination", func(t *testing.T) {
+		store := postgres.NewOrderStore(db)
+		sharedTime := time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
+		fixtures := []order.Order{
+			mustPostgresOrder(t, "page-order-new", "pagination-customer", "page-key-new", sharedTime.Add(time.Second)),
+			mustPostgresOrder(t, "page-order-c", "pagination-customer", "page-key-c", sharedTime),
+			mustPostgresOrder(t, "page-order-b", "pagination-customer", "page-key-b", sharedTime),
+			mustPostgresOrder(t, "page-order-a", "pagination-customer", "page-key-a", sharedTime),
+			mustPostgresOrder(t, "page-other", "pagination-other-customer", "page-other-key", sharedTime.Add(time.Hour)),
+		}
+		if err := store.Transact(ctx, func(tx orderapp.Transaction) error {
+			for _, fixture := range fixtures {
+				if err := tx.SaveOrder(fixture); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("seed pagination orders: %v", err)
+		}
+
+		service := newPostgresOrderService(db, &sequenceIDGenerator{prefix: "unused"})
+		first, err := service.ListOrders(ctx, orderapp.ListOrdersQuery{
+			CustomerID: "pagination-customer", Limit: 2,
+		})
+		if err != nil {
+			t.Fatalf("first ListOrders() error = %v", err)
+		}
+		if got := postgresOrderIDs(first.Orders); fmt.Sprint(got) != "[page-order-new page-order-c]" || first.NextCursor == "" {
+			t.Fatalf("first page = %v, cursor empty = %v", got, first.NextCursor == "")
+		}
+
+		second, err := service.ListOrders(ctx, orderapp.ListOrdersQuery{
+			CustomerID: "pagination-customer", Limit: 2, Cursor: first.NextCursor,
+		})
+		if err != nil {
+			t.Fatalf("second ListOrders() error = %v", err)
+		}
+		if got := postgresOrderIDs(second.Orders); fmt.Sprint(got) != "[page-order-b page-order-a]" || second.NextCursor != "" {
+			t.Fatalf("second page = %v, cursor = %q", got, second.NextCursor)
+		}
+
+		assertOrderPaginationUsesIndex(t, ctx, db, sharedTime, "page-order-c")
+	})
 }
 
 type sequenceIDGenerator struct {
@@ -295,6 +343,71 @@ func queryAvailable(t *testing.T, db *sql.DB, productID string) int {
 		t.Fatalf("query stock: %v", err)
 	}
 	return available
+}
+
+func mustPostgresOrder(
+	t *testing.T, orderID, customerID, idempotencyKey string, createdAt time.Time,
+) order.Order {
+	t.Helper()
+	created, err := order.New(
+		orderID, customerID, "product-2", 1, 6900, idempotencyKey, createdAt,
+	)
+	if err != nil {
+		t.Fatalf("create pagination order fixture: %v", err)
+	}
+	return created
+}
+
+func postgresOrderIDs(orders []order.Order) []string {
+	ids := make([]string, 0, len(orders))
+	for _, current := range orders {
+		ids = append(ids, current.ID())
+	}
+	return ids
+}
+
+func assertOrderPaginationUsesIndex(
+	t *testing.T, ctx context.Context, db *sql.DB, cursorTime time.Time, cursorID string,
+) {
+	t.Helper()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin EXPLAIN transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// 小型测试数据上 PostgreSQL 可能合理地选择顺序扫描。关闭顺序扫描只用于
+	// 验证这个查询可以匹配目标复合索引，不代表生产环境应修改规划器设置。
+	if _, err := tx.ExecContext(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatalf("disable sequential scan for EXPLAIN: %v", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+		EXPLAIN (COSTS OFF)
+		SELECT id, customer_id, product_id, quantity, unit_price_cents,
+		       total_cents, status, idempotency_key, created_at
+		FROM orders
+		WHERE customer_id = $1 AND (created_at, id) < ($2, $3)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $4
+	`, "pagination-customer", cursorTime, cursorID, 3)
+	if err != nil {
+		t.Fatalf("EXPLAIN order pagination query: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("scan EXPLAIN plan: %v", err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read EXPLAIN plan: %v", err)
+	}
+	if !strings.Contains(plan.String(), "orders_customer_created_at_id_idx") {
+		t.Fatalf("pagination query did not use expected index:\n%s", plan.String())
+	}
 }
 
 func seedIntegrationUsers(t *testing.T, db *sql.DB, userIDs ...string) {

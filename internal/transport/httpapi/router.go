@@ -34,6 +34,7 @@ type CatalogQueries interface {
 type OrderUseCases interface {
 	CreateOrder(context.Context, orderapp.CreateOrderCommand) (orderapp.CreateOrderResult, error)
 	GetOrder(context.Context, string, string) (order.Order, error)
+	ListOrders(context.Context, orderapp.ListOrdersQuery) (orderapp.ListOrdersResult, error)
 }
 
 type PaymentQueries interface {
@@ -143,6 +144,7 @@ func NewRouterWithConfig(
 
 	orderHandler := newOrderHandler(orderUseCases)
 	mux.Handle("POST /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.create)))
+	mux.Handle("GET /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.list)))
 	mux.Handle("GET /orders/{orderID}", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.getByID)))
 	if config.PaymentQueries != nil {
 		paymentHandler := newPaymentHandler(config.PaymentQueries)

@@ -112,6 +112,49 @@ func (s *OrderStore) GetOrderByIDAndCustomerID(
 	return got, nil
 }
 
+func (s *OrderStore) ListOrdersByCustomerID(
+	ctx context.Context,
+	customerID string,
+	after *orderapp.PageBoundary,
+	limit int,
+) ([]order.Order, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, orderapp.ErrInvalidListLimit
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	orders := make([]order.Order, 0, limit)
+	for _, current := range s.ordersByID {
+		if current.CustomerID() != customerID || !isOrderAfterBoundary(current, after) {
+			continue
+		}
+		orders = append(orders, current)
+	}
+	sort.Slice(orders, func(i, j int) bool {
+		if orders[i].CreatedAt().Equal(orders[j].CreatedAt()) {
+			return orders[i].ID() > orders[j].ID()
+		}
+		return orders[i].CreatedAt().After(orders[j].CreatedAt())
+	})
+	if len(orders) > limit {
+		orders = orders[:limit]
+	}
+	return orders, nil
+}
+
+func isOrderAfterBoundary(current order.Order, after *orderapp.PageBoundary) bool {
+	if after == nil {
+		return true
+	}
+	return current.CreatedAt().Before(after.CreatedAt) ||
+		(current.CreatedAt().Equal(after.CreatedAt) && current.ID() < after.OrderID)
+}
+
 type memoryTransaction struct {
 	stocksByProduct         map[string]inventory.Stock
 	ordersByID              map[string]order.Order

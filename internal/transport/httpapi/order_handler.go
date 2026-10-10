@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,11 @@ type orderResponse struct {
 	TotalCents     int64        `json:"total_cents"`
 	Status         order.Status `json:"status"`
 	CreatedAt      time.Time    `json:"created_at"`
+}
+
+type orderListResponse struct {
+	Items      []orderResponse `json:"items"`
+	NextCursor string          `json:"next_cursor"`
 }
 
 func (h *orderHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +108,66 @@ func (h *orderHandler) getByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = writeJSON(w, http.StatusOK, orderToResponse(got))
+}
+
+func (h *orderHandler) list(w http.ResponseWriter, r *http.Request) {
+	userID, ok := AuthenticatedUserID(r.Context())
+	if !ok {
+		writeUnauthorized(w)
+		return
+	}
+
+	query, err := parseOrderListQuery(r, userID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid order list query")
+		return
+	}
+
+	result, err := h.useCases.ListOrders(r.Context(), query)
+	if err != nil {
+		switch {
+		case errors.Is(err, orderapp.ErrInvalidListLimit), errors.Is(err, orderapp.ErrInvalidListCursor):
+			writeError(w, http.StatusBadRequest, "invalid order list query")
+		default:
+			writeError(w, http.StatusInternalServerError, "internal server error")
+		}
+		return
+	}
+
+	items := make([]orderResponse, 0, len(result.Orders))
+	for _, current := range result.Orders {
+		items = append(items, orderToResponse(current))
+	}
+	_ = writeJSON(w, http.StatusOK, orderListResponse{
+		Items: items, NextCursor: result.NextCursor,
+	})
+}
+
+func parseOrderListQuery(r *http.Request, customerID string) (orderapp.ListOrdersQuery, error) {
+	values := r.URL.Query()
+	for key := range values {
+		if key != "limit" && key != "cursor" {
+			return orderapp.ListOrdersQuery{}, orderapp.ErrInvalidListCursor
+		}
+	}
+	if len(values["limit"]) > 1 || len(values["cursor"]) > 1 {
+		return orderapp.ListOrdersQuery{}, orderapp.ErrInvalidListLimit
+	}
+
+	limit := orderapp.DefaultListLimit
+	if rawLimit, present := values["limit"]; present {
+		parsed, err := strconv.Atoi(rawLimit[0])
+		if err != nil || parsed < 1 || parsed > orderapp.MaxListLimit {
+			return orderapp.ListOrdersQuery{}, orderapp.ErrInvalidListLimit
+		}
+		limit = parsed
+	}
+
+	return orderapp.ListOrdersQuery{
+		CustomerID: customerID,
+		Limit:      limit,
+		Cursor:     values.Get("cursor"),
+	}, nil
 }
 
 func writeCreateOrderError(w http.ResponseWriter, err error) {
