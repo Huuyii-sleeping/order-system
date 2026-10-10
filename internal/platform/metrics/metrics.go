@@ -31,6 +31,10 @@ type Registry struct {
 	notificationRetries         *prometheus.CounterVec
 	notificationReconciliations *prometheus.CounterVec
 	notificationWebhooks        *prometheus.CounterVec
+	authCredentialCleanupRuns   *prometheus.CounterVec
+	authCredentialCleanupRows   *prometheus.CounterVec
+	authCredentialCleanupTime   *prometheus.HistogramVec
+	authCredentialLastSuccess   prometheus.Gauge
 }
 
 func NewRegistry() *Registry {
@@ -167,6 +171,33 @@ func NewRegistry() *Registry {
 			prometheus.CounterOpts{Namespace: "order_system", Subsystem: "notification", Name: "webhooks_total", Help: "Total notification provider webhook requests by bounded outcome."},
 			[]string{"outcome"},
 		),
+		authCredentialCleanupRuns: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "auth_credential_cleanup",
+				Name: "runs_total", Help: "Total authentication credential cleanup runs by bounded outcome.",
+			},
+			[]string{"outcome"},
+		),
+		authCredentialCleanupRows: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "auth_credential_cleanup",
+				Name: "deleted_rows_total", Help: "Total expired authentication credential rows deleted by kind.",
+			},
+			[]string{"kind"},
+		),
+		authCredentialCleanupTime: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Namespace: "order_system", Subsystem: "auth_credential_cleanup",
+				Name: "duration_seconds", Help: "Authentication credential cleanup duration in seconds by bounded outcome.",
+				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"outcome"},
+		),
+		authCredentialLastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "order_system", Subsystem: "auth_credential_cleanup",
+			Name: "last_success_timestamp_seconds",
+			Help: "Unix timestamp of the most recent successful authentication credential cleanup.",
+		}),
 	}
 
 	registry.MustRegister(
@@ -190,6 +221,10 @@ func NewRegistry() *Registry {
 		metrics.notificationRetries,
 		metrics.notificationReconciliations,
 		metrics.notificationWebhooks,
+		metrics.authCredentialCleanupRuns,
+		metrics.authCredentialCleanupRows,
+		metrics.authCredentialCleanupTime,
+		metrics.authCredentialLastSuccess,
 	)
 	return metrics
 }
@@ -208,6 +243,26 @@ func (r *Registry) RecordNotificationReconciliation(outcome string) {
 
 func (r *Registry) RecordNotificationWebhook(outcome string) {
 	r.notificationWebhooks.WithLabelValues(outcome).Inc()
+}
+
+// RecordAuthCredentialCleanup 记录认证凭证维护的低基数指标。
+// outcome 只允许 success、error、canceled 等固定结果；不把 token hash、用户 ID
+// 或数据库错误文本放入标签，避免 Prometheus 时间序列无限增长。
+func (r *Registry) RecordAuthCredentialCleanup(
+	outcome string, sessionsDeleted, refreshTokensDeleted int64, duration time.Duration,
+) {
+	r.authCredentialCleanupRuns.WithLabelValues(outcome).Inc()
+	r.authCredentialCleanupTime.WithLabelValues(outcome).Observe(duration.Seconds())
+	if outcome != "success" {
+		return
+	}
+	if sessionsDeleted > 0 {
+		r.authCredentialCleanupRows.WithLabelValues("sessions").Add(float64(sessionsDeleted))
+	}
+	if refreshTokensDeleted > 0 {
+		r.authCredentialCleanupRows.WithLabelValues("refresh_tokens").Add(float64(refreshTokensDeleted))
+	}
+	r.authCredentialLastSuccess.Set(float64(time.Now().Unix()))
 }
 
 func (r *Registry) RecordPaymentProviderCall(outcome string, duration time.Duration) {

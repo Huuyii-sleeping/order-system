@@ -13,6 +13,12 @@ type CredentialCleaner interface {
 	PruneExpiredCredentials(context.Context, time.Time, int) (CleanupResult, error)
 }
 
+// CleanupMetrics 是维护 Worker 的观测端口。应用层只报告固定结果和删除数量，
+// 具体由 Prometheus、测试桩或其他监控适配器实现。
+type CleanupMetrics interface {
+	RecordAuthCredentialCleanup(outcome string, sessionsDeleted, refreshTokensDeleted int64, duration time.Duration)
+}
+
 type CleanupWorkerConfig struct {
 	Interval  time.Duration
 	BatchSize int
@@ -29,6 +35,7 @@ type CleanupWorker struct {
 	cleaner CredentialCleaner
 	clock   Clock
 	logger  *slog.Logger
+	metrics CleanupMetrics
 	config  CleanupWorkerConfig
 }
 
@@ -37,6 +44,7 @@ func NewCleanupWorker(
 	clock Clock,
 	logger *slog.Logger,
 	config CleanupWorkerConfig,
+	metrics CleanupMetrics,
 ) *CleanupWorker {
 	if config.Interval <= 0 {
 		config.Interval = defaultCleanupInterval
@@ -51,6 +59,7 @@ func NewCleanupWorker(
 		cleaner: cleaner,
 		clock:   clock,
 		logger:  logger,
+		metrics: metrics,
 		config:  config,
 	}
 }
@@ -97,7 +106,20 @@ func (w *CleanupWorker) RunOnce(ctx context.Context) (CleanupResult, error) {
 }
 
 func (w *CleanupWorker) runOnce(ctx context.Context) {
+	startedAt := time.Now()
 	result, err := w.RunOnce(ctx)
+	if w.metrics != nil {
+		outcome := "success"
+		if err != nil {
+			outcome = "error"
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				outcome = "canceled"
+			}
+		}
+		w.metrics.RecordAuthCredentialCleanup(
+			outcome, result.SessionsDeleted, result.RefreshTokensDeleted, time.Since(startedAt),
+		)
+	}
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && w.logger != nil {
 			w.logger.ErrorContext(ctx, "expired credential cleanup failed", "error", err)

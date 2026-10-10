@@ -167,6 +167,29 @@
       "targets": [{"editorMode": "code", "expr": "sum by (outcome) (increase(order_system_notification_webhooks_total[5m]))", "legendFormat": "{{outcome}}", "range": true, "refId": "A"}],
       "title": "Notification provider webhooks in 5m",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 16, "x": 0, "y": 58},
+      "id": 16,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"editorMode": "code", "expr": "sum by (outcome) (rate(order_system_auth_credential_cleanup_runs_total[15m]))", "legendFormat": "runs {{outcome}}", "range": true, "refId": "A"},
+        {"editorMode": "code", "expr": "sum by (kind) (increase(order_system_auth_credential_cleanup_deleted_rows_total[15m]))", "legendFormat": "deleted {{kind}}", "range": true, "refId": "B"}
+      ],
+      "title": "Authentication credential cleanup",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 58},
+      "id": 17,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"editorMode": "code", "expr": "time() - order_system_auth_credential_cleanup_last_success_timestamp_seconds", "legendFormat": "age", "range": true, "refId": "A"}],
+      "title": "Credential cleanup age",
+      "type": "stat"
     }
   ],
   "refresh": "5s",

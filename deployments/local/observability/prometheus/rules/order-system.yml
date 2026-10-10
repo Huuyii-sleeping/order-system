@@ -157,3 +157,27 @@ groups:
         annotations:
           summary: Notification webhook authentication failures are elevated
           description: More than ten notification callbacks failed signature or timestamp validation during the last five minutes.
+
+  - name: order-system-maintenance
+    rules:
+      - alert: OrderSystemAuthCredentialCleanupFailures
+        expr: sum(increase(order_system_auth_credential_cleanup_runs_total{outcome="error"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Authentication credential cleanup is failing
+          description: The authentication credential cleanup worker has failed at least once during the last fifteen minutes.
+
+      - alert: OrderSystemAuthCredentialCleanupStale
+        expr: |
+          (
+            time() - order_system_auth_credential_cleanup_last_success_timestamp_seconds > 7200
+          )
+          or absent(order_system_auth_credential_cleanup_last_success_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Authentication credential cleanup is stale
+          description: No successful authentication credential cleanup has been observed for more than two hours.

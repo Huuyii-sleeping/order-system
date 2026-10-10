@@ -22,6 +22,19 @@ type cleanupStub struct {
 	callCount int
 }
 
+type cleanupMetricsStub struct {
+	mu       sync.Mutex
+	outcomes []string
+}
+
+func (m *cleanupMetricsStub) RecordAuthCredentialCleanup(
+	outcome string, _, _ int64, _ time.Duration,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.outcomes = append(m.outcomes, outcome)
+}
+
 func (s *cleanupStub) PruneExpiredCredentials(context.Context, time.Time, int) (authapp.CleanupResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -57,6 +70,7 @@ func TestCleanupWorkerRunsImmediatelyAndOnSchedule(t *testing.T) {
 		cleanupClockStub{now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)},
 		nil,
 		authapp.CleanupWorkerConfig{Interval: 10 * time.Millisecond, BatchSize: 2},
+		nil,
 	)
 	stopCtx, stop := context.WithCancel(context.Background())
 	workCtx, cancelWork := context.WithCancel(context.Background())
@@ -93,6 +107,7 @@ func TestCleanupWorkerRunsImmediatelyAndOnSchedule(t *testing.T) {
 
 func TestCleanupWorkerKeepsRetryingAfterTransientFailure(t *testing.T) {
 	called := make(chan struct{}, 2)
+	metrics := &cleanupMetricsStub{}
 	cleaner := &cleanupStub{
 		called:  called,
 		errors:  []error{errors.New("database unavailable"), nil},
@@ -103,6 +118,7 @@ func TestCleanupWorkerKeepsRetryingAfterTransientFailure(t *testing.T) {
 		cleanupClockStub{now: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)},
 		nil,
 		authapp.CleanupWorkerConfig{Interval: 10 * time.Millisecond, BatchSize: 2},
+		metrics,
 	)
 	stopCtx, stop := context.WithCancel(context.Background())
 	workCtx, cancelWork := context.WithCancel(context.Background())
@@ -133,5 +149,10 @@ func TestCleanupWorkerKeepsRetryingAfterTransientFailure(t *testing.T) {
 	defer cleaner.mu.Unlock()
 	if cleaner.callCount != 2 {
 		t.Fatalf("cleanup call count = %d, want 2", cleaner.callCount)
+	}
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	if len(metrics.outcomes) != 2 || metrics.outcomes[0] != "error" || metrics.outcomes[1] != "success" {
+		t.Fatalf("cleanup metric outcomes = %v, want [error success]", metrics.outcomes)
 	}
 }

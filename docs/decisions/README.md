@@ -18,3 +18,4 @@
 - [`0018-notification-provider-webhook.md`](0018-notification-provider-webhook.md)：通过 HMAC Webhook 与持久化事件幂等主动收敛通知结果。
 - [`0019-order-keyset-pagination.md`](0019-order-keyset-pagination.md)：订单历史使用复合游标、Keyset Pagination 和匹配查询形状的索引。
 - [`0020-expired-credential-cleanup.md`](0020-expired-credential-cleanup.md)：过期认证凭证使用有界批量删除和独立维护 Worker 回收。
+- [`0021-auth-credential-cleanup-observability.md`](0021-auth-credential-cleanup-observability.md)：为认证凭证维护任务增加低基数指标、最近成功时间和 Prometheus 告警。

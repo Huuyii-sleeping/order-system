@@ -114,6 +114,7 @@ func run(logger *slog.Logger) error {
 			Interval:  cfg.CredentialCleanupInterval,
 			BatchSize: cfg.CredentialCleanupBatchSize,
 		},
+		metricRegistry,
 	)
 	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+4)
 	for index, worker := range outboxWorkers {

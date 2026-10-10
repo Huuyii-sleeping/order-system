@@ -288,6 +288,8 @@ Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失�
 标签只使用固定的结果、拒绝原因和状态，不包含订单 ID、支付 ID 或错误文本。
 通知还暴露 `order_system_notification_reconciliations_total`，使用 `found`、`not_found`
 和 `error` 三种低基数结果观察 Provider 查询对账是否正常收敛。
+认证凭证维护还暴露 `order_system_auth_credential_cleanup_runs_total`、删除行数、批次耗时
+和最近成功时间指标；Prometheus 会在清理失败或超过两个小时没有成功批次时告警。
 
 ## 使用 Prometheus、Tempo 和 Grafana
 

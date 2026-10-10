@@ -30,6 +30,8 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 	registry.RecordNotificationRetry("provider_error")
 	registry.RecordNotificationReconciliation("found")
 	registry.RecordNotificationWebhook("processed")
+	registry.RecordAuthCredentialCleanup("success", 3, 4, 25*time.Millisecond)
+	registry.RecordAuthCredentialCleanup("error", 0, 0, 10*time.Millisecond)
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	response := httptest.NewRecorder()
@@ -63,6 +65,13 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 		`order_system_notification_retries_total{reason="provider_error"} 1`,
 		`order_system_notification_reconciliations_total{outcome="found"} 1`,
 		`order_system_notification_webhooks_total{outcome="processed"} 1`,
+		`order_system_auth_credential_cleanup_runs_total{outcome="success"} 1`,
+		`order_system_auth_credential_cleanup_runs_total{outcome="error"} 1`,
+		`order_system_auth_credential_cleanup_deleted_rows_total{kind="sessions"} 3`,
+		`order_system_auth_credential_cleanup_deleted_rows_total{kind="refresh_tokens"} 4`,
+		`order_system_auth_credential_cleanup_duration_seconds_count{outcome="success"} 1`,
+		`order_system_auth_credential_cleanup_duration_seconds_count{outcome="error"} 1`,
+		`order_system_auth_credential_cleanup_last_success_timestamp_seconds`,
 		`go_goroutines`,
 	} {
 		if !strings.Contains(output, want) {

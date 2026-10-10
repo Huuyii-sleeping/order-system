@@ -81,6 +81,9 @@ order_system_kafka_consumer_lag_records
 sum by (outcome) (rate(order_system_kafka_processing_attempts_total[5m]))
 sum by (outcome) (rate(order_system_payment_provider_requests_total[5m]))
 order_system_payment_provider_circuit_state
+sum by (outcome) (rate(order_system_auth_credential_cleanup_runs_total[15m]))
+sum by (kind) (increase(order_system_auth_credential_cleanup_deleted_rows_total[15m]))
+time() - order_system_auth_credential_cleanup_last_success_timestamp_seconds
 ```
 
 在 Grafana 的 `Explore` 中选择 `Tempo` 数据源，使用 TraceQL 查询：
@@ -116,6 +119,9 @@ order_system_payment_provider_circuit_state
 7. 告警已触发但无人收到通知：当前没有 Alertmanager，这是预期边界。
 8. 支付熔断已打开：按 `outcome` 区分超时、依赖错误和非法响应，并参考
    `payment-provider-resilience.md` 验证冷却后的半开探测。
+9. 认证凭证清理告警触发：先看 `runs_total{outcome="error"}` 和清理耗时，再检查
+   PostgreSQL 连接、锁等待及 `expires_at` 索引；如果最近成功时间持续增长，确认
+   `auth-credential-cleanup` 是否仍由后台 Runtime 监管。
 
 ## 停止
 
