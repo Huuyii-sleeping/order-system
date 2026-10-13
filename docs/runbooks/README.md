@@ -14,3 +14,4 @@
 - [`performance-baseline.md`](performance-baseline.md)：隔离基础设施中的 HTTP 性能基线、阈值、参数覆盖和结果解读。
 - [`rollout-and-rollback.md`](rollout-and-rollback.md)：灰度发布、readiness 门禁、回滚演练和生产排查顺序。
 - [`kubernetes-deployment.md`](kubernetes-deployment.md)：Kubernetes 清单检查、Secret 注入、滚动发布、回滚和排查顺序。
+- [`event-contracts.md`](event-contracts.md)：事件契约检查、兼容性判断、版本升级和失败排查。

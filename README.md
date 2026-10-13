@@ -417,6 +417,23 @@ make rollout-check
 仍然能够服务。脚本使用内存模式和独立端口，不连接已有基础设施；真实发布边界见
 [`docs/runbooks/rollout-and-rollback.md`](docs/runbooks/rollout-and-rollback.md)。
 
+## 事件契约与版本化
+
+订单、支付和通知模块通过 Outbox 与消息 Topic 传递版本化 JSON 事件。契约测试位于
+`tests/contract`，会检查 Topic 名称、公开字段集合、关键字段值和支付事件的敏感字段边界。
+兼容的新增字段需要显式评审；删除字段、改变类型或改变语义时，应创建新的 `v2` Topic 和事件类型，
+不能直接改变已经被消费者依赖的 `v1`。
+
+只运行事件契约检查：
+
+```bash
+make contract-check
+```
+
+这项检查不需要 PostgreSQL、Redis、Kafka 或 Kubernetes；它只验证 JSON 契约，不替代 Outbox、
+Inbox、Broker 投递和消费者事务测试。维护步骤见
+[`docs/runbooks/event-contracts.md`](docs/runbooks/event-contracts.md)。
+
 ## Kubernetes 部署基线
 
 Kustomize 清单位于 `deployments/kubernetes/base`，包含 API Deployment、ClusterIP Service、

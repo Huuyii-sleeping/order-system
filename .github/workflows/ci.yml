@@ -58,9 +58,25 @@ jobs:
       - name: Render Kubernetes manifests
         run: make kubernetes-check
 
+  contract:
+    name: Event contract checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify versioned event contracts
+        run: make contract-check
+
   container:
     name: Container build
-    needs: [go, observability, kubernetes]
+    needs: [go, observability, kubernetes, contract]
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
