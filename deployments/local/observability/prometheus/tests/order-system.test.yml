@@ -31,43 +31,142 @@ tests:
         alertname: OrderSystemTargetDown
         exp_alerts: []
 
-  - name: sustained-http-error-ratio-alerts
+  - name: fast-slo-burn-records-slis-and-alerts
     interval: 1m
     input_series:
       - series: 'order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="200"}'
-        values: '0+18x12'
+        values: '0+588x75'
       - series: 'order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="500"}'
-        values: '0+2x12'
+        values: '0+12x75'
+      - series: 'order_system_http_request_duration_seconds_bucket{method="GET",route="/orders/{orderID}",le="0.5"}'
+        values: '0+450x75'
+      - series: 'order_system_http_request_duration_seconds_count{method="GET",route="/orders/{orderID}"}'
+        values: '0+600x75'
+      # 即使探针持续失败，也不能进入用户请求的 SLI 分母或分子。
+      - series: 'order_system_http_requests_total{method="GET",route="/healthz",status="500"}'
+        values: '0+6000x75'
+      - series: 'order_system_http_request_duration_seconds_bucket{method="GET",route="/healthz",le="0.5"}'
+        values: '0x75'
+      - series: 'order_system_http_request_duration_seconds_count{method="GET",route="/healthz"}'
+        values: '0+6000x75'
+    promql_expr_test:
+      - expr: order_system:slo_eligible_requests:rate5m
+        eval_time: 70m
+        exp_samples:
+          - labels: 'order_system:slo_eligible_requests:rate5m{}'
+            value: 10
+      - expr: 'order_system:slo_error_ratio:rate5m{slo="http-availability"}'
+        eval_time: 70m
+        exp_samples:
+          - labels: 'order_system:slo_error_ratio:rate5m{objective="0.999",slo="http-availability"}'
+            value: 0.02
+      - expr: 'order_system:slo_error_ratio:rate5m{slo="http-latency"}'
+        eval_time: 70m
+        exp_samples:
+          - labels: 'order_system:slo_error_ratio:rate5m{objective="0.99",slo="http-latency"}'
+            value: 0.25
     alert_rule_test:
-      - eval_time: 10m
-        alertname: OrderSystemHighHTTPErrorRate
+      - eval_time: 70m
+        alertname: OrderSystemHTTPAvailabilityBudgetBurnFast
         exp_alerts:
           - exp_labels:
-              severity: warning
+              objective: "0.999"
+              severity: critical
+              slo: http-availability
             exp_annotations:
-              summary: Order System HTTP 5xx rate is high
-              description: More than 5 percent of HTTP requests have returned 5xx for five minutes.
+              summary: HTTP availability error budget is burning fast
+              description: The 99.9 percent availability SLO is burning faster than 14.4 times budget in both the 1h and 5m windows.
+      - eval_time: 70m
+        alertname: OrderSystemHTTPLatencyBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              objective: "0.99"
+              severity: critical
+              slo: http-latency
+            exp_annotations:
+              summary: HTTP latency error budget is burning fast
+              description: The 99 percent under 500ms latency SLO is burning faster than 14.4 times budget in both the 1h and 5m windows.
 
-  - name: sustained-http-p95-latency-alerts
+  - name: persistent-moderate-slo-burn-alerts-on-slow-windows
     interval: 1m
     input_series:
+      - series: 'order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="200"}'
+        values: '0+594x430'
+      - series: 'order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="500"}'
+        values: '0+6x430'
       - series: 'order_system_http_request_duration_seconds_bucket{method="GET",route="/orders/{orderID}",le="0.5"}'
-        values: '0x12'
-      - series: 'order_system_http_request_duration_seconds_bucket{method="GET",route="/orders/{orderID}",le="0.75"}'
-        values: '0+60x12'
-      - series: 'order_system_http_request_duration_seconds_bucket{method="GET",route="/orders/{orderID}",le="+Inf"}'
-        values: '0+60x12'
+        values: '0+552x430'
       - series: 'order_system_http_request_duration_seconds_count{method="GET",route="/orders/{orderID}"}'
-        values: '0+60x12'
+        values: '0+600x430'
     alert_rule_test:
-      - eval_time: 10m
-        alertname: OrderSystemHighP95Latency
+      - eval_time: 7h
+        alertname: OrderSystemHTTPAvailabilityBudgetBurnSlow
         exp_alerts:
           - exp_labels:
+              objective: "0.999"
               severity: warning
+              slo: http-availability
             exp_annotations:
-              summary: Order System HTTP p95 latency is high
-              description: The overall HTTP p95 latency has exceeded 500 milliseconds for five minutes.
+              summary: HTTP availability error budget is burning persistently
+              description: The 99.9 percent availability SLO is burning faster than 6 times budget in both the 6h and 30m windows.
+      - eval_time: 7h
+        alertname: OrderSystemHTTPLatencyBudgetBurnSlow
+        exp_alerts:
+          - exp_labels:
+              objective: "0.99"
+              severity: warning
+              slo: http-latency
+            exp_annotations:
+              summary: HTTP latency error budget is burning persistently
+              description: The 99 percent under 500ms latency SLO is burning faster than 6 times budget in both the 6h and 30m windows.
+
+  - name: healthy-slo-does-not-alert
+    interval: 1m
+    input_series:
+      - series: 'order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="200"}'
+        values: '0+600x430'
+      - series: 'order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="500"}'
+        values: '0x430'
+      - series: 'order_system_http_request_duration_seconds_bucket{method="GET",route="/orders/{orderID}",le="0.5"}'
+        values: '0+600x430'
+      - series: 'order_system_http_request_duration_seconds_count{method="GET",route="/orders/{orderID}"}'
+        values: '0+600x430'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: OrderSystemHTTPAvailabilityBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: OrderSystemHTTPAvailabilityBudgetBurnSlow
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: OrderSystemHTTPLatencyBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: OrderSystemHTTPLatencyBudgetBurnSlow
+        exp_alerts: []
+
+  - name: low-traffic-slo-does-not-page-on-one-failure-per-minute
+    interval: 1m
+    input_series:
+      - series: 'order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="500"}'
+        values: '0+1x430'
+      - series: 'order_system_http_request_duration_seconds_bucket{method="GET",route="/orders/{orderID}",le="0.5"}'
+        values: '0x430'
+      - series: 'order_system_http_request_duration_seconds_count{method="GET",route="/orders/{orderID}"}'
+        values: '0+1x430'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: OrderSystemHTTPAvailabilityBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: OrderSystemHTTPAvailabilityBudgetBurnSlow
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: OrderSystemHTTPLatencyBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: OrderSystemHTTPLatencyBudgetBurnSlow
+        exp_alerts: []
 
   - name: transient-small-lag-does-not-alert
     interval: 1m

@@ -1,4 +1,193 @@
 groups:
+  - name: order-system-slo-recording
+    rules:
+      # SLO 只衡量用户和机器客户端真正调用的业务接口。探针与指标抓取
+      # 由 TargetDown 单独监控，不能用高频健康检查稀释业务请求失败率。
+      - record: order_system:slo_eligible_requests:rate5m
+        expr: |
+          sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[5m]))
+
+      - record: order_system:slo_eligible_requests:rate30m
+        expr: |
+          sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[30m]))
+
+      # Availability 的 bad event 是 HTTP 5xx。4xx 表示服务正确完成了认证、
+      # 参数校验或业务拒绝，因此不消耗可用性错误预算。
+      - record: order_system:slo_error_ratio:rate5m
+        labels:
+          slo: http-availability
+          objective: "0.999"
+        expr: |
+          (
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)",status=~"5.."}[5m]))
+            /
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[5m]))
+          )
+          and on ()
+          sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[5m])) > 0
+
+      - record: order_system:slo_error_ratio:rate30m
+        labels:
+          slo: http-availability
+          objective: "0.999"
+        expr: |
+          (
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)",status=~"5.."}[30m]))
+            /
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[30m]))
+          )
+          and on ()
+          sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[30m])) > 0
+
+      - record: order_system:slo_error_ratio:rate1h
+        labels:
+          slo: http-availability
+          objective: "0.999"
+        expr: |
+          (
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)",status=~"5.."}[1h]))
+            /
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[1h]))
+          )
+          and on ()
+          sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[1h])) > 0
+
+      - record: order_system:slo_error_ratio:rate6h
+        labels:
+          slo: http-availability
+          objective: "0.999"
+        expr: |
+          (
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)",status=~"5.."}[6h]))
+            /
+            sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[6h]))
+          )
+          and on ()
+          sum(rate(order_system_http_requests_total{route!~"/(healthz|readyz|metrics)"}[6h])) > 0
+
+      # Latency SLO 使用直方图中 le="0.5" 的累计桶作为 good event。
+      # 这里衡量的是“在 500ms 内完成的请求比例”，不是 p95 瞬时值。
+      - record: order_system:slo_error_ratio:rate5m
+        labels:
+          slo: http-latency
+          objective: "0.99"
+        expr: |
+          (
+            1 -
+            sum(rate(order_system_http_request_duration_seconds_bucket{route!~"/(healthz|readyz|metrics)",le="0.5"}[5m]))
+            /
+            sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[5m]))
+          )
+          and on ()
+          sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[5m])) > 0
+
+      - record: order_system:slo_error_ratio:rate30m
+        labels:
+          slo: http-latency
+          objective: "0.99"
+        expr: |
+          (
+            1 -
+            sum(rate(order_system_http_request_duration_seconds_bucket{route!~"/(healthz|readyz|metrics)",le="0.5"}[30m]))
+            /
+            sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[30m]))
+          )
+          and on ()
+          sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[30m])) > 0
+
+      - record: order_system:slo_error_ratio:rate1h
+        labels:
+          slo: http-latency
+          objective: "0.99"
+        expr: |
+          (
+            1 -
+            sum(rate(order_system_http_request_duration_seconds_bucket{route!~"/(healthz|readyz|metrics)",le="0.5"}[1h]))
+            /
+            sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[1h]))
+          )
+          and on ()
+          sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[1h])) > 0
+
+      - record: order_system:slo_error_ratio:rate6h
+        labels:
+          slo: http-latency
+          objective: "0.99"
+        expr: |
+          (
+            1 -
+            sum(rate(order_system_http_request_duration_seconds_bucket{route!~"/(healthz|readyz|metrics)",le="0.5"}[6h]))
+            /
+            sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[6h]))
+          )
+          and on ()
+          sum(rate(order_system_http_request_duration_seconds_count{route!~"/(healthz|readyz|metrics)"}[6h])) > 0
+
+  - name: order-system-slo-alerts
+    rules:
+      # 14.4 倍燃烧率约会在 1 小时内消耗 28 天预算的 2%。
+      # 长短窗口同时超标，既发现持续影响，也要求故障此刻仍在发生。
+      - alert: OrderSystemHTTPAvailabilityBudgetBurnFast
+        expr: |
+          (
+            order_system:slo_error_ratio:rate1h{slo="http-availability"} / (1 - 0.999) > 14.4
+            and on (slo, objective)
+            order_system:slo_error_ratio:rate5m{slo="http-availability"} / (1 - 0.999) > 14.4
+          )
+          and on ()
+          order_system:slo_eligible_requests:rate5m > 0.1
+        labels:
+          severity: critical
+        annotations:
+          summary: HTTP availability error budget is burning fast
+          description: The 99.9 percent availability SLO is burning faster than 14.4 times budget in both the 1h and 5m windows.
+
+      # 6 倍燃烧率约会在 6 小时内消耗 28 天预算的 5%。
+      - alert: OrderSystemHTTPAvailabilityBudgetBurnSlow
+        expr: |
+          (
+            order_system:slo_error_ratio:rate6h{slo="http-availability"} / (1 - 0.999) > 6
+            and on (slo, objective)
+            order_system:slo_error_ratio:rate30m{slo="http-availability"} / (1 - 0.999) > 6
+          )
+          and on ()
+          order_system:slo_eligible_requests:rate30m > 0.05
+        labels:
+          severity: warning
+        annotations:
+          summary: HTTP availability error budget is burning persistently
+          description: The 99.9 percent availability SLO is burning faster than 6 times budget in both the 6h and 30m windows.
+
+      - alert: OrderSystemHTTPLatencyBudgetBurnFast
+        expr: |
+          (
+            order_system:slo_error_ratio:rate1h{slo="http-latency"} / (1 - 0.99) > 14.4
+            and on (slo, objective)
+            order_system:slo_error_ratio:rate5m{slo="http-latency"} / (1 - 0.99) > 14.4
+          )
+          and on ()
+          order_system:slo_eligible_requests:rate5m > 0.1
+        labels:
+          severity: critical
+        annotations:
+          summary: HTTP latency error budget is burning fast
+          description: The 99 percent under 500ms latency SLO is burning faster than 14.4 times budget in both the 1h and 5m windows.
+
+      - alert: OrderSystemHTTPLatencyBudgetBurnSlow
+        expr: |
+          (
+            order_system:slo_error_ratio:rate6h{slo="http-latency"} / (1 - 0.99) > 6
+            and on (slo, objective)
+            order_system:slo_error_ratio:rate30m{slo="http-latency"} / (1 - 0.99) > 6
+          )
+          and on ()
+          order_system:slo_eligible_requests:rate30m > 0.05
+        labels:
+          severity: warning
+        annotations:
+          summary: HTTP latency error budget is burning persistently
+          description: The 99 percent under 500ms latency SLO is burning faster than 6 times budget in both the 6h and 30m windows.
+
   - name: order-system-availability
     rules:
       - alert: OrderSystemTargetDown
@@ -9,37 +198,6 @@ groups:
         annotations:
           summary: Order System cannot be scraped
           description: Prometheus has been unable to scrape the Order System for one minute.
-
-      - alert: OrderSystemHighHTTPErrorRate
-        expr: |
-          (
-            sum(rate(order_system_http_requests_total{status=~"5.."}[5m]))
-            /
-            clamp_min(sum(rate(order_system_http_requests_total[5m])), 0.001)
-          ) > 0.05
-          and
-          sum(rate(order_system_http_requests_total[5m])) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: Order System HTTP 5xx rate is high
-          description: More than 5 percent of HTTP requests have returned 5xx for five minutes.
-
-      - alert: OrderSystemHighP95Latency
-        expr: |
-          histogram_quantile(
-            0.95,
-            sum by (le) (rate(order_system_http_request_duration_seconds_bucket[5m]))
-          ) > 0.5
-          and
-          sum(rate(order_system_http_request_duration_seconds_count[5m])) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: Order System HTTP p95 latency is high
-          description: The overall HTTP p95 latency has exceeded 500 milliseconds for five minutes.
 
   - name: order-system-kafka
     rules:

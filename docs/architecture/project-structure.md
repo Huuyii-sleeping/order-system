@@ -107,7 +107,8 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/platform/telemetry/`：初始化 OpenTelemetry，并用 W3C Trace Context 串联 HTTP、
   Outbox、Kafka、Payment Task 和支付结果 Saga。
 - `deployments/local/observability/`：提供 Prometheus 抓取与告警规则、规则测试和
-  Tempo Trace 存储、Grafana 自动配置；观测后端不参与业务事务。
+  Tempo Trace 存储、Grafana 自动配置；HTTP Recording Rule 还会计算可用性与延迟 SLI、
+  28 天错误预算燃烧率；观测后端不参与业务事务。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。
 - `internal/app/`：根据配置选择存储适配器并完成依赖组装。
 - `internal/app/background.go`：统一监管后台组件，并把停止领取与取消在途工作拆成两阶段。

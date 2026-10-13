@@ -29,3 +29,4 @@
 - [`0029-http-api-contract-and-errors.md`](0029-http-api-contract-and-errors.md)：通过 OpenAPI、真实路由探测和稳定错误码保护 HTTP 客户端契约。
 - [`0030-database-connection-pool.md`](0030-database-connection-pool.md)：为单实例数据库连接建立显式预算、池满背压指标和持续饱和告警。
 - [`0031-structured-logging-and-correlation.md`](0031-structured-logging-and-correlation.md)：统一 JSON 日志、Context 关联字段、日志级别和敏感信息边界。
+- [`0032-service-level-objectives-and-error-budgets.md`](0032-service-level-objectives-and-error-budgets.md)：用用户视角 SLI、28 天 SLO、错误预算和多窗口燃烧率定义 HTTP 可靠性。

@@ -317,6 +317,18 @@ HTTP Access Log 只记录 Method、路由模板、状态码、耗时和响应大
 字段说明、安全边界和排查方法见
 [`docs/runbooks/structured-logging.md`](docs/runbooks/structured-logging.md)。
 
+## SLI、SLO 与错误预算
+
+Prometheus 使用现有 HTTP Counter 和 Histogram 计算两个 28 天滚动目标：业务请求非 5xx 的比例
+达到 99.9%，业务请求在 500ms 内完成的比例达到 99%。`/healthz`、`/readyz` 和 `/metrics`
+不进入用户 SLI，4xx 当前视为服务正确完成协议或业务拒绝。
+
+Recording Rule 预计算 5m、30m、1h 和 6h 错误比例。告警不再只看固定 5xx 或 p95 阈值，
+而是要求长短窗口的错误预算燃烧率同时超过 14.4x 或 6x，并通过最低流量门槛过滤低流量噪声。
+Grafana 展示最近 1h SLI、28d 剩余错误预算和当前燃烧率；本地 Prometheus 保留 30 天指标以
+覆盖计算窗口。完整口径、公式和告警处置见
+[`docs/runbooks/service-level-objectives.md`](docs/runbooks/service-level-objectives.md)。
+
 ## 使用 Prometheus、Tempo 和 Grafana
 
 应用在宿主机启动后，可以启动本地观测栈：
@@ -348,11 +360,10 @@ make observability-check
 make observability-down
 ```
 
-当前规则覆盖抓取失败、HTTP 5xx 比例、HTTP P95 延迟、Kafka Consumer Lag、
-Handler 失败、Offset 提交失败、死信发布、数据库连接池持续饱和、支付 Provider 故障、熔断
-持续打开，以及通知重试、未知结果和 Provider 对账失败。
-阈值是本地学习基线，生产环境应根据
-SLO、正常流量和故障预算调整。完整的启动、验证和故障模拟步骤见
+当前规则覆盖抓取失败、HTTP 可用性和延迟错误预算燃烧、Kafka Consumer Lag、Handler 失败、
+Offset 提交失败、死信发布、数据库连接池持续饱和、支付 Provider 故障、熔断持续打开，
+以及通知重试、未知结果和 Provider 对账失败。SLO 与流量门槛是本地学习基线，生产环境必须根据
+用户承诺、入口层指标和正常流量重新评审。完整的启动、验证和故障模拟步骤见
 `docs/runbooks/local-observability.md`。
 
 Trace Context 使用 W3C `traceparent`/`tracestate`，并随 Outbox 与 Payment Task 一起

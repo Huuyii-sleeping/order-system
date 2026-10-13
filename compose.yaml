@@ -129,6 +129,8 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
+      # SLO 使用 28 天滚动窗口，本地至少保留覆盖完整窗口的指标。
+      - --storage.tsdb.retention.time=30d
     ports:
       - "127.0.0.1:9090:9090"
     extra_hosts:
