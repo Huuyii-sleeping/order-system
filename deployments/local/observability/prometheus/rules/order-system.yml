@@ -90,6 +90,24 @@ groups:
           summary: Order System published a Kafka dead letter
           description: At least one record was isolated to a dead letter topic during the last five minutes.
 
+  - name: order-system-database
+    rules:
+      - alert: OrderSystemDatabasePoolSaturated
+        expr: |
+          (
+            max without (state) (order_system_database_pool_connections{state="in_use"})
+            /
+            clamp_min(order_system_database_pool_max_open_connections, 1)
+          ) >= 0.9
+          and on (instance, job)
+          rate(order_system_database_pool_waits_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database connection pool is saturated
+          description: At least 90 percent of database connections are in use and callers have waited for a connection for five minutes.
+
   - name: order-system-payment-provider
     rules:
       - alert: OrderSystemPaymentProviderCircuitOpen

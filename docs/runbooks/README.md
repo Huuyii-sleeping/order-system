@@ -16,3 +16,4 @@
 - [`kubernetes-deployment.md`](kubernetes-deployment.md)：Kubernetes 清单检查、Secret 注入、滚动发布、回滚和排查顺序。
 - [`event-contracts.md`](event-contracts.md)：事件契约检查、兼容性判断、版本升级和失败排查。
 - [`http-api-contracts.md`](http-api-contracts.md)：OpenAPI、稳定错误码、接口兼容性判断和契约失败排查。
+- [`database-connection-pool.md`](database-connection-pool.md)：数据库连接池预算、背压指标、饱和告警和调优排查顺序。

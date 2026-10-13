@@ -168,6 +168,39 @@ tests:
         alertname: OrderSystemPaymentProviderCircuitOpen
         exp_alerts: []
 
+  - name: sustained-database-pool-saturation-alerts
+    interval: 1m
+    input_series:
+      - series: 'order_system_database_pool_connections{state="in_use"}'
+        values: '18x12'
+      - series: 'order_system_database_pool_max_open_connections'
+        values: '20x12'
+      - series: 'order_system_database_pool_waits_total'
+        values: '0+60x12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OrderSystemDatabasePoolSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Database connection pool is saturated
+              description: At least 90 percent of database connections are in use and callers have waited for a connection for five minutes.
+
+  - name: busy-database-pool-without-waits-does-not-alert
+    interval: 1m
+    input_series:
+      - series: 'order_system_database_pool_connections{state="in_use"}'
+        values: '18x12'
+      - series: 'order_system_database_pool_max_open_connections'
+        values: '20x12'
+      - series: 'order_system_database_pool_waits_total'
+        values: '0x12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OrderSystemDatabasePoolSaturated
+        exp_alerts: []
+
   - name: payment-provider-failures-alert
     interval: 1m
     input_series:

@@ -190,6 +190,31 @@
       "targets": [{"editorMode": "code", "expr": "time() - order_system_auth_credential_cleanup_last_success_timestamp_seconds", "legendFormat": "age", "range": true, "refId": "A"}],
       "title": "Credential cleanup age",
       "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 66},
+      "id": 18,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"editorMode": "code", "expr": "order_system_database_pool_connections", "legendFormat": "{{state}}", "range": true, "refId": "A"},
+        {"editorMode": "code", "expr": "order_system_database_pool_max_open_connections", "legendFormat": "max_open", "range": true, "refId": "B"}
+      ],
+      "title": "Database pool connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 66},
+      "id": 19,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"editorMode": "code", "expr": "rate(order_system_database_pool_waits_total[5m])", "legendFormat": "waits/s", "range": true, "refId": "A"}
+      ],
+      "title": "Database pool waits",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",
@@ -201,5 +226,5 @@
   "timezone": "browser",
   "title": "Order System Overview",
   "uid": "order-system-overview",
-  "version": 5
+  "version": 6
 }

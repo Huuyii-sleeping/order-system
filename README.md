@@ -72,6 +72,14 @@ make db-down
 `cmd/migrate` 执行，已执行版本、文件名和 SHA-256 checksum 记录在
 `schema_migrations` 表中；已应用迁移发生改名或内容漂移时启动会失败。
 
+PostgreSQL 模式使用 `database/sql` 连接池。默认单实例最多打开 20 条连接、保留 5 条空闲
+连接，并分别按 30 分钟总生命周期和 5 分钟空闲时间回收。可以通过
+`DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS`、
+`DATABASE_CONN_MAX_LIFETIME` 和 `DATABASE_CONN_MAX_IDLE_TIME` 调整。连接上限是单实例
+预算，多实例理论上限约为“单实例上限 × 实例数”，必须为迁移、运维和其他服务预留数据库连接。
+指标、容量计算和饱和排查见
+[`docs/runbooks/database-connection-pool.md`](docs/runbooks/database-connection-pool.md)。
+
 ## 使用 Redis 缓存和共享限流
 
 启动本地 Redis：
@@ -291,6 +299,8 @@ Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失�
 和 `error` 三种低基数结果观察 Provider 查询对账是否正常收敛。
 认证凭证维护还暴露 `order_system_auth_credential_cleanup_runs_total`、删除行数、批次耗时
 和最近成功时间指标；Prometheus 会在清理失败或超过两个小时没有成功批次时告警。
+PostgreSQL 模式还暴露连接池的打开、使用中和空闲连接数，以及累计等待次数、等待耗时和连接
+回收原因；等待类 Counter 需要使用 `rate()` 或 `increase()` 判断当前压力。
 
 ## 使用 Prometheus、Tempo 和 Grafana
 
@@ -324,8 +334,8 @@ make observability-down
 ```
 
 当前规则覆盖抓取失败、HTTP 5xx 比例、HTTP P95 延迟、Kafka Consumer Lag、
-Handler 失败、Offset 提交失败、死信发布、支付 Provider 故障、熔断持续打开，以及通知
-重试、未知结果和 Provider 对账失败。
+Handler 失败、Offset 提交失败、死信发布、数据库连接池持续饱和、支付 Provider 故障、熔断
+持续打开，以及通知重试、未知结果和 Provider 对账失败。
 阈值是本地学习基线，生产环境应根据
 SLO、正常流量和故障预算调整。完整的启动、验证和故障模拟步骤见
 `docs/runbooks/local-observability.md`。

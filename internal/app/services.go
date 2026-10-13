@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -65,6 +66,7 @@ type cacheMetrics interface {
 type serviceMetrics interface {
 	cacheMetrics
 	paymentprovider.ResilienceMetrics
+	RegisterDatabasePool(*sql.DB) error
 }
 
 func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics) (*Services, error) {
@@ -113,9 +115,18 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		outboxStores = []outboxapp.Store{memoryOrders, memoryPayments}
 
 	case config.StoragePostgres:
-		db, err := postgres.Open(ctx, cfg.DatabaseURL)
+		db, err := postgres.OpenWithOptions(ctx, cfg.DatabaseURL, postgres.PoolOptions{
+			MaxOpenConns: cfg.DatabaseMaxOpenConns, MaxIdleConns: cfg.DatabaseMaxIdleConns,
+			ConnMaxLifetime: cfg.DatabaseConnMaxLifetime, ConnMaxIdleTime: cfg.DatabaseConnMaxIdleTime,
+		})
 		if err != nil {
 			return nil, err
+		}
+		if metrics != nil {
+			if err := metrics.RegisterDatabasePool(db); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("register database pool metrics: %w", err)
+			}
 		}
 		closers = append(closers, db)
 		readiness = append(readiness, db)

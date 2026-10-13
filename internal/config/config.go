@@ -31,6 +31,10 @@ type Config struct {
 
 	StorageDriver           string
 	DatabaseURL             string
+	DatabaseMaxOpenConns    int
+	DatabaseMaxIdleConns    int
+	DatabaseConnMaxLifetime time.Duration
+	DatabaseConnMaxIdleTime time.Duration
 	CacheDriver             string
 	RedisURL                string
 	RedisKeyPrefix          string
@@ -99,6 +103,10 @@ func Load() (Config, error) {
 		ReadinessTimeout:               2 * time.Second,
 		StorageDriver:                  strings.ToLower(envOrDefault("STORAGE_DRIVER", StorageMemory)),
 		DatabaseURL:                    os.Getenv("DATABASE_URL"),
+		DatabaseMaxOpenConns:           20,
+		DatabaseMaxIdleConns:           5,
+		DatabaseConnMaxLifetime:        30 * time.Minute,
+		DatabaseConnMaxIdleTime:        5 * time.Minute,
 		CacheDriver:                    strings.ToLower(envOrDefault("CACHE_DRIVER", CacheNone)),
 		RedisURL:                       strings.TrimSpace(os.Getenv("REDIS_URL")),
 		RedisKeyPrefix:                 envOrDefault("REDIS_KEY_PREFIX", "order-system"),
@@ -195,6 +203,8 @@ func Load() (Config, error) {
 		{name: "SHUTDOWN_TIMEOUT", target: &cfg.ShutdownTimeout},
 		{name: "SHUTDOWN_DRAIN_DELAY", target: &cfg.ShutdownDrainDelay},
 		{name: "READINESS_TIMEOUT", target: &cfg.ReadinessTimeout},
+		{name: "DATABASE_CONN_MAX_LIFETIME", target: &cfg.DatabaseConnMaxLifetime},
+		{name: "DATABASE_CONN_MAX_IDLE_TIME", target: &cfg.DatabaseConnMaxIdleTime},
 		{name: "CATALOG_CACHE_TTL", target: &cfg.CatalogCacheTTL},
 		{name: "CATALOG_NOT_FOUND_CACHE_TTL", target: &cfg.CatalogNotFoundCacheTTL},
 		{name: "CATALOG_LOAD_TIMEOUT", target: &cfg.CatalogLoadTimeout},
@@ -230,6 +240,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.SecureCookies = secureCookies
+	databaseMaxOpenConns, err := loadPositiveInt("DATABASE_MAX_OPEN_CONNS", cfg.DatabaseMaxOpenConns)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DatabaseMaxOpenConns = databaseMaxOpenConns
+	databaseMaxIdleConns, err := loadPositiveInt("DATABASE_MAX_IDLE_CONNS", cfg.DatabaseMaxIdleConns)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DatabaseMaxIdleConns = databaseMaxIdleConns
 	loginRateLimit, err := loadPositiveInt("LOGIN_RATE_LIMIT", cfg.LoginRateLimit)
 	if err != nil {
 		return Config{}, err
@@ -339,6 +359,9 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf(
 			"OUTBOX_RETRY_MAX must be greater than or equal to OUTBOX_RETRY_BASE",
 		)
+	}
+	if cfg.DatabaseMaxIdleConns > cfg.DatabaseMaxOpenConns {
+		return Config{}, fmt.Errorf("DATABASE_MAX_IDLE_CONNS must not exceed DATABASE_MAX_OPEN_CONNS")
 	}
 	if cfg.PaymentRetryMax < cfg.PaymentRetryBase {
 		return Config{}, fmt.Errorf(

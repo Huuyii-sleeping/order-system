@@ -84,6 +84,9 @@ order_system_payment_provider_circuit_state
 sum by (outcome) (rate(order_system_auth_credential_cleanup_runs_total[15m]))
 sum by (kind) (increase(order_system_auth_credential_cleanup_deleted_rows_total[15m]))
 time() - order_system_auth_credential_cleanup_last_success_timestamp_seconds
+order_system_database_pool_connections
+rate(order_system_database_pool_waits_total[5m])
+rate(order_system_database_pool_wait_duration_seconds_total[5m])
 ```
 
 在 Grafana 的 `Explore` 中选择 `Tempo` 数据源，使用 TraceQL 查询：
@@ -122,6 +125,9 @@ time() - order_system_auth_credential_cleanup_last_success_timestamp_seconds
 9. 认证凭证清理告警触发：先看 `runs_total{outcome="error"}` 和清理耗时，再检查
    PostgreSQL 连接、锁等待及 `expires_at` 索引；如果最近成功时间持续增长，确认
    `auth-credential-cleanup` 是否仍由后台 Runtime 监管。
+10. 数据库连接池饱和：同时检查使用中连接比例与等待速率，再排查慢 SQL、锁等待、长事务和
+    实例数变化；不要在没有核对数据库全局连接余量时直接调大单实例上限。完整步骤见
+    `database-connection-pool.md`。
 
 ## 停止
 

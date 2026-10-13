@@ -26,6 +26,10 @@ func TestLoad(t *testing.T) {
 		readinessTimeout                    string
 		storageDriver                       string
 		databaseURL                         string
+		databaseMaxOpenConns                string
+		databaseMaxIdleConns                string
+		databaseConnMaxLifetime             string
+		databaseConnMaxIdleTime             string
 		cacheDriver                         string
 		redisURL                            string
 		redisKeyPrefix                      string
@@ -159,12 +163,16 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name:            "environment variables override defaults",
-			appName:         "checkout-service",
-			httpAddr:        ":9090",
-			shutdownTimeout: "30s",
-			storageDriver:   config.StoragePostgres,
-			databaseURL:     "postgres://localhost/order_system",
+			name:                    "environment variables override defaults",
+			appName:                 "checkout-service",
+			httpAddr:                ":9090",
+			shutdownTimeout:         "30s",
+			storageDriver:           config.StoragePostgres,
+			databaseURL:             "postgres://localhost/order_system",
+			databaseMaxOpenConns:    "12",
+			databaseMaxIdleConns:    "4",
+			databaseConnMaxLifetime: "20m",
+			databaseConnMaxIdleTime: "3m",
 			want: config.Config{
 				AppName:              "checkout-service",
 				HTTPAddr:             ":9090",
@@ -173,6 +181,8 @@ func TestLoad(t *testing.T) {
 				ReadinessTimeout:     2 * time.Second,
 				StorageDriver:        config.StoragePostgres,
 				DatabaseURL:          "postgres://localhost/order_system",
+				DatabaseMaxOpenConns: 12, DatabaseMaxIdleConns: 4,
+				DatabaseConnMaxLifetime: 20 * time.Minute, DatabaseConnMaxIdleTime: 3 * time.Minute,
 				AccessTokenTTL:       15 * time.Minute,
 				RefreshTokenTTL:      30 * 24 * time.Hour,
 				AuthRateWindow:       time.Minute,
@@ -374,6 +384,19 @@ func TestLoad(t *testing.T) {
 			wantErrorContains: "unsupported CACHE_DRIVER",
 		},
 		{
+			name: "rejects zero database max open connections", databaseMaxOpenConns: "0",
+			wantErrorContains: "DATABASE_MAX_OPEN_CONNS",
+		},
+		{
+			name:                 "rejects database idle connections above open limit",
+			databaseMaxOpenConns: "4", databaseMaxIdleConns: "5",
+			wantErrorContains: "DATABASE_MAX_IDLE_CONNS",
+		},
+		{
+			name: "rejects zero database connection max idle time", databaseConnMaxIdleTime: "0s",
+			wantErrorContains: "DATABASE_CONN_MAX_IDLE_TIME",
+		},
+		{
 			name:              "rejects an invalid shutdown timeout",
 			shutdownTimeout:   "ten-seconds",
 			wantErrorContains: "parse SHUTDOWN_TIMEOUT",
@@ -566,6 +589,10 @@ func TestLoad(t *testing.T) {
 			t.Setenv("READINESS_TIMEOUT", tt.readinessTimeout)
 			t.Setenv("STORAGE_DRIVER", tt.storageDriver)
 			t.Setenv("DATABASE_URL", tt.databaseURL)
+			t.Setenv("DATABASE_MAX_OPEN_CONNS", tt.databaseMaxOpenConns)
+			t.Setenv("DATABASE_MAX_IDLE_CONNS", tt.databaseMaxIdleConns)
+			t.Setenv("DATABASE_CONN_MAX_LIFETIME", tt.databaseConnMaxLifetime)
+			t.Setenv("DATABASE_CONN_MAX_IDLE_TIME", tt.databaseConnMaxIdleTime)
 			t.Setenv("CACHE_DRIVER", tt.cacheDriver)
 			t.Setenv("REDIS_URL", tt.redisURL)
 			t.Setenv("REDIS_KEY_PREFIX", tt.redisKeyPrefix)
@@ -646,6 +673,18 @@ func TestLoad(t *testing.T) {
 			want := tt.want
 			if want.ShutdownDrainDelay == 0 {
 				want.ShutdownDrainDelay = 2 * time.Second
+			}
+			if want.DatabaseMaxOpenConns == 0 {
+				want.DatabaseMaxOpenConns = 20
+			}
+			if want.DatabaseMaxIdleConns == 0 {
+				want.DatabaseMaxIdleConns = 5
+			}
+			if want.DatabaseConnMaxLifetime == 0 {
+				want.DatabaseConnMaxLifetime = 30 * time.Minute
+			}
+			if want.DatabaseConnMaxIdleTime == 0 {
+				want.DatabaseConnMaxIdleTime = 5 * time.Minute
 			}
 			if want.CacheDriver == "" {
 				want.CacheDriver = config.CacheNone
