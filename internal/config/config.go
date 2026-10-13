@@ -9,6 +9,11 @@ import (
 )
 
 const (
+	LogDebug = "debug"
+	LogInfo  = "info"
+	LogWarn  = "warn"
+	LogError = "error"
+
 	StorageMemory   = "memory"
 	StoragePostgres = "postgres"
 
@@ -20,7 +25,8 @@ const (
 )
 
 type Config struct {
-	AppName string
+	AppName  string
+	LogLevel string
 
 	HTTPAddr          string
 	OTLPTraceEndpoint string
@@ -96,6 +102,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		AppName:                        envOrDefault("APP_NAME", "order-system"),
+		LogLevel:                       strings.ToLower(strings.TrimSpace(envOrDefault("LOG_LEVEL", LogInfo))),
 		HTTPAddr:                       envOrDefault("HTTP_ADDR", ":8080"),
 		OTLPTraceEndpoint:              strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")),
 		ShutdownTimeout:                10 * time.Second,
@@ -152,6 +159,12 @@ func Load() (Config, error) {
 		NotificationProviderTimeout:    2 * time.Second,
 		NotificationWebhookSecret:      strings.TrimSpace(os.Getenv("NOTIFICATION_WEBHOOK_SECRET")),
 		NotificationWebhookTolerance:   5 * time.Minute,
+	}
+
+	switch cfg.LogLevel {
+	case LogDebug, LogInfo, LogWarn, LogError:
+	default:
+		return Config{}, fmt.Errorf("unsupported LOG_LEVEL %q", cfg.LogLevel)
 	}
 
 	switch cfg.StorageDriver {

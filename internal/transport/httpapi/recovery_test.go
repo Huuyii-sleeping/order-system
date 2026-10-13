@@ -66,12 +66,15 @@ func TestRecoveryReturnsInternalServerError(t *testing.T) {
 	for _, want := range []string{
 		"msg=\"panic recovered\"",
 		"request_id=panic-request-42",
-		"panic=\"unexpected failure\"",
+		"panic_type=string",
 		"status=500",
 	} {
 		if !strings.Contains(logOutput, want) {
 			t.Errorf("log output does not contain %q", want)
 		}
+	}
+	if strings.Contains(logOutput, "unexpected failure") {
+		t.Fatalf("panic value leaked into log: %q", logOutput)
 	}
 }
 

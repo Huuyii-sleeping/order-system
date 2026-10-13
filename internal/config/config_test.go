@@ -19,6 +19,7 @@ func TestLoad(t *testing.T) {
 		// 每个测试场景会把这些值写入环境变量。
 		// 空字符串表示模拟“没有配置该环境变量”。
 		appName                             string
+		logLevel                            string
 		httpAddr                            string
 		otlpTraceEndpoint                   string
 		shutdownTimeout                     string
@@ -165,6 +166,7 @@ func TestLoad(t *testing.T) {
 		{
 			name:                    "environment variables override defaults",
 			appName:                 "checkout-service",
+			logLevel:                config.LogWarn,
 			httpAddr:                ":9090",
 			shutdownTimeout:         "30s",
 			storageDriver:           config.StoragePostgres,
@@ -175,6 +177,7 @@ func TestLoad(t *testing.T) {
 			databaseConnMaxIdleTime: "3m",
 			want: config.Config{
 				AppName:              "checkout-service",
+				LogLevel:             config.LogWarn,
 				HTTPAddr:             ":9090",
 				ShutdownTimeout:      30 * time.Second,
 				ShutdownDrainDelay:   2 * time.Second,
@@ -374,6 +377,10 @@ func TestLoad(t *testing.T) {
 				PaymentPollInterval: time.Second, PaymentBatchSize: 10,
 				PaymentLeaseDuration: 30 * time.Second, PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
 			},
+		},
+		{
+			name: "rejects unsupported log level", logLevel: "verbose",
+			wantErrorContains: "unsupported LOG_LEVEL",
 		},
 		{
 			name: "redis cache requires URL", cacheDriver: config.CacheRedis,
@@ -582,6 +589,7 @@ func TestLoad(t *testing.T) {
 			// t.Setenv 会在子测试结束后自动恢复原来的环境变量。
 			// 因此每个用例都不会污染其他用例。
 			t.Setenv("APP_NAME", tt.appName)
+			t.Setenv("LOG_LEVEL", tt.logLevel)
 			t.Setenv("HTTP_ADDR", tt.httpAddr)
 			t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", tt.otlpTraceEndpoint)
 			t.Setenv("SHUTDOWN_TIMEOUT", tt.shutdownTimeout)
@@ -671,6 +679,9 @@ func TestLoad(t *testing.T) {
 			}
 
 			want := tt.want
+			if want.LogLevel == "" {
+				want.LogLevel = config.LogInfo
+			}
 			if want.ShutdownDrainDelay == 0 {
 				want.ShutdownDrainDelay = 2 * time.Second
 			}

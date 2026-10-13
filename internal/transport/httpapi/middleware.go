@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	platformlogging "example.com/order-system/internal/platform/logging"
 	"example.com/order-system/internal/platform/telemetry"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -26,8 +27,11 @@ const RequestIDHeader = "X-Request-ID"
 
 const unmatchedRoute = "unmatched"
 
+const maxRequestIDLength = 128
+
 type metricRouteContextKey struct{}
 type traceRouteContextKey struct{}
+type accessRouteContextKey struct{}
 
 type metricRouteState struct {
 	pattern string
@@ -37,12 +41,6 @@ type HTTPMetrics interface {
 	RequestStarted()
 	RequestFinished(method string, route string, statusCode int, duration time.Duration)
 }
-
-// requestIDContextKey 是 Context 中保存请求 ID 的私有 key 类型。
-//
-// 不使用普通字符串作为 key，可以避免当前包和其他包使用相同字符串
-// 时发生意外覆盖。
-type requestIDContextKey struct{}
 
 var fallbackRequestIDCounter uint64
 
@@ -58,7 +56,7 @@ var fallbackRequestIDCounter uint64
 func WithRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := strings.TrimSpace(r.Header.Get(RequestIDHeader))
-		if requestID == "" {
+		if !validRequestID(requestID) {
 			requestID = generateRequestID()
 		}
 
@@ -68,11 +66,7 @@ func WithRequestID(next http.Handler) http.Handler {
 
 		// Request 是不可变风格使用的：不直接修改原 Request，
 		// 而是创建一个带新 Context 的副本继续传递。
-		ctx := context.WithValue(
-			r.Context(),
-			requestIDContextKey{},
-			requestID,
-		)
+		ctx := platformlogging.WithRequestID(r.Context(), requestID)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -86,10 +80,12 @@ func WithAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
 		recorder := &statusRecorder{ResponseWriter: w}
+		routeState := &metricRouteState{}
+		ctx := context.WithValue(r.Context(), accessRouteContextKey{}, routeState)
 
 		// 先让后续中间件和路由处理请求。
 		// statusRecorder 会在这里记录最终状态码和响应大小。
-		next.ServeHTTP(recorder, r)
+		next.ServeHTTP(recorder, r.WithContext(ctx))
 
 		statusCode := recorder.statusCode
 		if statusCode == 0 {
@@ -97,15 +93,15 @@ func WithAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
 			statusCode = http.StatusOK
 		}
 
-		logger.InfoContext(r.Context(),
+		logger.InfoContext(ctx,
 			"http request",
-			"request_id", RequestID(r.Context()),
+			"request_id", RequestID(ctx),
 			"method", r.Method,
-			"path", r.URL.Path,
+			"route", metricRoute(routeState.pattern),
 			"status", statusCode,
 			"bytes", recorder.bytesWritten,
 			"duration", time.Since(startedAt),
-			"trace_id", telemetry.TraceID(r.Context()),
+			"trace_id", telemetry.TraceID(ctx),
 		)
 	})
 }
@@ -195,6 +191,9 @@ func withMatchedRoute(next *http.ServeMux) http.Handler {
 		if state, ok := r.Context().Value(traceRouteContextKey{}).(*metricRouteState); ok {
 			state.pattern = pattern
 		}
+		if state, ok := r.Context().Value(accessRouteContextKey{}).(*metricRouteState); ok {
+			state.pattern = pattern
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -245,8 +244,24 @@ func (r *statusRecorder) Unwrap() http.ResponseWriter {
 // 如果当前请求没有经过 WithRequestID，返回值为空字符串。
 // 返回字符串而不是暴露 Context key，可以避免调用方依赖内部实现。
 func RequestID(ctx context.Context) string {
-	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
-	return requestID
+	return platformlogging.RequestID(ctx)
+}
+
+func validRequestID(requestID string) bool {
+	if requestID == "" || len(requestID) > maxRequestIDLength {
+		return false
+	}
+	for _, character := range requestID {
+		switch {
+		case character >= 'a' && character <= 'z':
+		case character >= 'A' && character <= 'Z':
+		case character >= '0' && character <= '9':
+		case character == '-', character == '_', character == '.', character == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // generateRequestID 生成一个 16 字节、32 个十六进制字符的请求 ID。

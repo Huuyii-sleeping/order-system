@@ -2,16 +2,24 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"time"
 
 	"example.com/order-system/internal/adapters/postgres"
+	platformlogging "example.com/order-system/internal/platform/logging"
 	"example.com/order-system/migrations"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	bootstrapLogger := platformlogging.NewDefault(os.Stdout, "order-system-migrate")
+	logger, err := platformlogging.New(os.Stdout, platformlogging.Config{
+		ServiceName: "order-system-migrate",
+		Level:       os.Getenv("LOG_LEVEL"),
+	})
+	if err != nil {
+		bootstrapLogger.Error("initialize logging", "error", err)
+		os.Exit(1)
+	}
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		logger.Error("DATABASE_URL is required")

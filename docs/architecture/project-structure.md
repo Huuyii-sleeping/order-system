@@ -100,6 +100,8 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `internal/application/notification/`：提供通知事件 Inbox 幂等、通知查询、任务租约、Provider 超时、稳定幂等键、查询对账、Webhook 回调消费和重试 Worker。
 - `internal/application/auth/`：提供注册、登录、凭证轮换，以及独立的过期认证凭证清理维护 Worker。
 - `internal/transport/httpapi/`：提供健康检查、认证、商品和订单 HTTP API；订单列表只使用认证身份并限制分页参数，通知 Webhook 则使用独立的 HMAC 机器认证。
+- `internal/platform/logging/`：统一创建 JSON Logger，控制日志级别，从 Context 关联 Request ID
+  与 Trace ID，并对明确命名的敏感属性做字段级脱敏。
 - `internal/platform/metrics/`：提供独立 Prometheus 注册表、Go Runtime、进程、HTTP 请求、
   Kafka 消费和 PostgreSQL 连接池指标；连接池状态在抓取时读取，不启动独立采集 goroutine。
 - `internal/platform/telemetry/`：初始化 OpenTelemetry，并用 W3C Trace Context 串联 HTTP、

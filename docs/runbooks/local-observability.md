@@ -7,11 +7,14 @@
 ```text
 Order System /metrics -> Prometheus -> PromQL / alerts -> Grafana
 Order System OTLP/HTTP -> Tempo -> TraceQL -> Grafana
+Order System JSON stdout -> local terminal / docker compose logs
 ```
 
 Prometheus、Tempo 和 Grafana 运行在 Docker 中，Order System 仍由宿主机上的 Go 命令启动。
 配置仅供本地学习：端口只绑定到 `127.0.0.1`，Grafana 使用公开的开发密码，
 没有配置 Alertmanager、长期存储、高可用或生产认证。
+本地栈也没有日志数据库；Prometheus 不接收日志，Tempo 只接收 Trace。结构化日志格式、关联字段和
+敏感信息边界见 `structured-logging.md`。
 
 ## 启动
 

@@ -302,6 +302,21 @@ Fetch 的 High Watermark 快照；Partition 在 Rebalance 中被收回或丢失�
 PostgreSQL 模式还暴露连接池的打开、使用中和空闲连接数，以及累计等待次数、等待耗时和连接
 回收原因；等待类 Counter 需要使用 `rate()` 或 `increase()` 判断当前压力。
 
+## 结构化日志与关联定位
+
+API 和迁移进程将结构化 JSON 日志写入 stdout。每条日志带有 `service`；使用 Context 记录的
+事件还会自动关联有效的 `request_id` 和 `trace_id`。`LOG_LEVEL` 支持 `debug`、`info`、
+`warn` 和 `error`，默认 `info`，非法值会在应用监听端口前被拒绝。
+
+HTTP Access Log 只记录 Method、路由模板、状态码、耗时和响应大小，不记录原始 URL、查询参数、
+请求体、Authorization 或 Cookie。不可信的 `X-Request-ID` 会限制字符集合和 128 字节长度；
+无效值由服务端重新生成。统一 Handler 会把明确命名为 Token、密码、Cookie、Secret 或 Key 的
+属性输出为 `[REDACTED]`，但它不能识别普通错误字符串中的秘密，调用方仍不得记录凭据和原始报文。
+
+本地日志直接从终端或 `docker compose logs api` 查看；当前 Grafana 没有配置日志数据源。
+字段说明、安全边界和排查方法见
+[`docs/runbooks/structured-logging.md`](docs/runbooks/structured-logging.md)。
+
 ## 使用 Prometheus、Tempo 和 Grafana
 
 应用在宿主机启动后，可以启动本地观测栈：

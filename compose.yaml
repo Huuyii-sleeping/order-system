@@ -7,6 +7,7 @@ services:
       context: .
     command: ["/app/migrate"]
     environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: postgres://order_system:order_system@postgres:5432/order_system?sslmode=disable
     depends_on:
       postgres:
@@ -34,6 +35,7 @@ services:
     build:
       context: .
     environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       HTTP_ADDR: :8080
       STORAGE_DRIVER: postgres
       DATABASE_URL: postgres://order_system:order_system@postgres:5432/order_system?sslmode=disable

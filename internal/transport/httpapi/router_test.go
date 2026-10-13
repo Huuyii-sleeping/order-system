@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"example.com/order-system/internal/transport/httpapi"
@@ -92,6 +93,37 @@ func TestRequestIDGeneratesWhenClientValueIsMissing(t *testing.T) {
 			handlerRequestID,
 			responseRequestID,
 		)
+	}
+}
+
+func TestRequestIDReplacesUnsafeClientValue(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		requestID string
+	}{
+		{name: "spaces", requestID: "contains spaces"},
+		{name: "too long", requestID: strings.Repeat("a", 129)},
+		{name: "non ASCII", requestID: "非-ascii-request-id"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			request.Header.Set(httpapi.RequestIDHeader, tt.requestID)
+			response := httptest.NewRecorder()
+
+			var handlerRequestID string
+			httpapi.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handlerRequestID = httpapi.RequestID(r.Context())
+				w.WriteHeader(http.StatusNoContent)
+			})).ServeHTTP(response, request)
+
+			responseRequestID := response.Header().Get(httpapi.RequestIDHeader)
+			if responseRequestID == tt.requestID || len(responseRequestID) != 32 {
+				t.Fatalf("response request ID = %q", responseRequestID)
+			}
+			if handlerRequestID != responseRequestID {
+				t.Fatalf("handler request ID = %q, response request ID = %q", handlerRequestID, responseRequestID)
+			}
+		})
 	}
 }
 

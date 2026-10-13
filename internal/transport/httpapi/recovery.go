@@ -32,13 +32,13 @@ func WithRecovery(logger *slog.Logger, next http.Handler) http.Handler {
 				return
 			}
 			span := trace.SpanFromContext(r.Context())
-			span.RecordError(fmt.Errorf("panic: %v", recovered))
+			span.RecordError(fmt.Errorf("panic recovered: %T", recovered))
 			span.SetStatus(codes.Error, "panic recovered")
 
-			logger.Error(
+			logger.ErrorContext(r.Context(),
 				"panic recovered",
 				"request_id", RequestID(r.Context()),
-				"panic", recovered,
+				"panic_type", fmt.Sprintf("%T", recovered),
 				"stack", string(debug.Stack()),
 			)
 

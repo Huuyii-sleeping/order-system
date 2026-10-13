@@ -40,15 +40,9 @@ func TestAccessLogRecordsRequestDetails(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuffer, nil))
 
-	// 用一个简单的下游 Handler 模拟业务接口。
-	// 它返回 201 和 7 个字节，方便验证状态码与响应大小。
-	next := http.HandlerFunc(func(
-		w http.ResponseWriter,
-		r *http.Request,
-	) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte("created"))
-	})
+	next := httpapi.NewRouter(
+		catalogQueriesStub{}, authenticatedAs("customer-1"), &orderUseCasesStub{},
+	)
 
 	// Request ID 必须在 Access Log 外层，
 	// 这样 Access Log 收到的 Request 才带有请求 ID Context。
@@ -56,14 +50,15 @@ func TestAccessLogRecordsRequestDetails(t *testing.T) {
 		httpapi.WithAccessLog(logger, next),
 	)
 
-	request := httptest.NewRequest(http.MethodGet, "/orders", nil)
+	request := httptest.NewRequest(http.MethodGet, "/orders/order-123", nil)
 	request.Header.Set(httpapi.RequestIDHeader, "access-log-request")
+	request.Header.Set("Authorization", "Bearer access-token")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status code = %d, want %d", response.Code, http.StatusCreated)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
 	}
 
 	logOutput := logBuffer.String()
@@ -71,13 +66,16 @@ func TestAccessLogRecordsRequestDetails(t *testing.T) {
 		"msg=\"http request\"",
 		"request_id=access-log-request",
 		"method=GET",
-		"path=/orders",
-		"status=201",
-		"bytes=7",
+		"route=/orders/{orderID}",
+		"status=200",
+		"bytes=",
 	} {
 		if !strings.Contains(logOutput, want) {
 			t.Errorf("log output = %q, want it to contain %q", logOutput, want)
 		}
+	}
+	if strings.Contains(logOutput, "/orders/order-123") {
+		t.Fatalf("access log contains raw resource path: %q", logOutput)
 	}
 }
 

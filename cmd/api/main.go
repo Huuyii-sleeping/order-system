@@ -18,28 +18,34 @@ import (
 	outboxapp "example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
+	platformlogging "example.com/order-system/internal/platform/logging"
 	platformmetrics "example.com/order-system/internal/platform/metrics"
 	"example.com/order-system/internal/platform/telemetry"
 	"example.com/order-system/internal/transport/httpapi"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
+	bootstrapLogger := platformlogging.NewDefault(os.Stdout, "order-system")
+	cfg, err := config.Load()
+	if err != nil {
+		bootstrapLogger.Error("application configuration rejected", "error", err)
+		os.Exit(1)
+	}
+	logger, err := platformlogging.New(os.Stdout, platformlogging.Config{
+		ServiceName: cfg.AppName,
+		Level:       cfg.LogLevel,
+	})
+	if err != nil {
+		bootstrapLogger.Error("initialize logging", "error", err)
+		os.Exit(1)
+	}
+	if err := run(logger, cfg); err != nil {
 		logger.Error("application stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
-	// 配置必须在服务启动前加载并校验。
-	//
-	// 如果配置不合法，服务不应该继续监听端口，
-	// 否则可能出现“服务看起来启动了，但行为不正确”的情况。
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
+func run(logger *slog.Logger, cfg config.Config) error {
 	telemetryStartupContext, cancelTelemetryStartup := context.WithTimeout(context.Background(), 10*time.Second)
 	tracerProvider, err := telemetry.NewProvider(telemetryStartupContext, telemetry.Config{
 		ServiceName: cfg.AppName, Endpoint: cfg.OTLPTraceEndpoint,
@@ -233,7 +239,6 @@ func run(logger *slog.Logger) error {
 	go func() {
 		logger.Info(
 			"http server starting",
-			"service", cfg.AppName,
 			"address", server.Addr,
 		)
 
