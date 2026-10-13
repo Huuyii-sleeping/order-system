@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test race vet check ci integration-check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration test-e2e run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
+.PHONY: fmt fmt-check test race vet check ci integration-check database-recovery-check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration test-e2e run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
 
 DATABASE_URL ?= postgres://order_system:order_system@127.0.0.1:5432/order_system?sslmode=disable
 REDIS_URL ?= redis://127.0.0.1:6379/0
@@ -25,6 +25,9 @@ ci: fmt-check check observability-check
 
 integration-check:
 	bash scripts/integration-check.sh
+
+database-recovery-check:
+	bash scripts/database-recovery-check.sh
 
 db-up:
 	docker compose up -d --wait postgres

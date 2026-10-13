@@ -24,5 +24,6 @@
 幂等键。不同商品的库存行可以并发处理。
 
 当前一个订单只有一个商品；后续支持多商品订单时，必须按稳定顺序锁定所有
-库存行，避免两个事务以不同顺序取得行锁导致死锁。迁移目前只支持向前执行，
-尚未实现回滚迁移。
+库存行，避免两个事务以不同顺序取得行锁导致死锁。数据库迁移明确采用
+forward-only 和 Expand/Contract，应用与数据恢复边界见
+[`0024-forward-migrations-and-recovery.md`](0024-forward-migrations-and-recovery.md)。

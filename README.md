@@ -69,7 +69,8 @@ make db-down
 ```
 
 `db-down` 不删除数据卷。配置示例见 `.env.example`。数据库迁移由
-`cmd/migrate` 执行，已执行版本记录在 `schema_migrations` 表中。
+`cmd/migrate` 执行，已执行版本、文件名和 SHA-256 checksum 记录在
+`schema_migrations` 表中；已应用迁移发生改名或内容漂移时启动会失败。
 
 ## 使用 Redis 缓存和共享限流
 
@@ -383,5 +384,16 @@ make integration-check
 该命令使用独立 Compose Project 和临时数据卷，结束时自动清理；详细范围和端口覆盖
 方式见 [`docs/runbooks/integration-and-fault-drills.md`](docs/runbooks/integration-and-fault-drills.md)。
 远程 CI 把它放在独立 Integration Job 中，和快速单元测试分层执行。
+
+在隔离 PostgreSQL 中执行真实 `pg_dump`、恢复到新数据库、重新校验迁移历史并比较
+业务数据指纹：
+
+```bash
+make database-recovery-check
+```
+
+项目使用 forward-only 和 Expand/Contract，不把破坏性 down migration 当作普通应用
+回滚方式。详细策略见
+[`docs/runbooks/database-migration-and-recovery.md`](docs/runbooks/database-migration-and-recovery.md)。
 
 项目结构和依赖方向见 `docs/architecture/project-structure.md`。

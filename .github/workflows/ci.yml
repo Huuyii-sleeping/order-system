@@ -76,3 +76,21 @@ jobs:
 
       - name: Run integration and dependency outage checks
         run: make integration-check
+
+  database-recovery:
+    name: Database backup and restore
+    needs: [integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify migration integrity and database recovery
+        run: make database-recovery-check
