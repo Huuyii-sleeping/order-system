@@ -53,7 +53,8 @@ order-system/
 ├── tests/                      # 跨模块测试
 │   ├── integration/
 │   ├── contract/
-│   └── e2e/
+│   ├── e2e/
+│   └── load/                    # 固定并发性能基线工具
 └── docs/                       # 架构、决策和运行手册
     ├── architecture/
     ├── decisions/
@@ -108,6 +109,7 @@ app 负责把 domain、application、adapters、transport 组装起来。
 - `migrations/`：包含数据库约束、索引和学习用种子数据。
 - `internal/app/`：根据配置选择存储适配器并完成依赖组装。
 - `internal/app/background.go`：统一监管后台组件，并把停止领取与取消在途工作拆成两阶段。
+- `tests/load/`：提供不依赖第三方压测工具的固定并发 HTTP 性能基线；它只用于本地和 CI 验收，不属于生产 API。
 - `cmd/api`：编排信号、readiness 排水、HTTP Shutdown、后台任务等待和资源逆序释放。
 
 后续会在部署等真实需求出现时继续填充目录。

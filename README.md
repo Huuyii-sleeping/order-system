@@ -396,4 +396,15 @@ make database-recovery-check
 回滚方式。详细策略见
 [`docs/runbooks/database-migration-and-recovery.md`](docs/runbooks/database-migration-and-recovery.md)。
 
+在隔离 PostgreSQL、Redis、Redpanda 和 API 中执行固定并发的 HTTP 性能基线，覆盖商品
+详情缓存读取和 liveness：
+
+```bash
+make performance-check
+```
+
+它输出 RPS、P50/P95/P99、最大延迟和错误率，并检查本地学习阈值。这个结果用于发现
+明显性能回归，不代表生产容量；详细参数和边界见
+[`docs/runbooks/performance-baseline.md`](docs/runbooks/performance-baseline.md)。
+
 项目结构和依赖方向见 `docs/architecture/project-structure.md`。

@@ -94,3 +94,21 @@ jobs:
 
       - name: Verify migration integrity and database recovery
         run: make database-recovery-check
+
+  performance:
+    name: HTTP performance baseline
+    needs: [integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run isolated performance baseline
+        run: make performance-check

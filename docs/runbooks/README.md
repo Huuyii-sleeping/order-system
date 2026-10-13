@@ -11,3 +11,4 @@
 - [`auth-credential-cleanup.md`](auth-credential-cleanup.md)：过期 Session/Refresh Token 的批量清理、故障排查和关闭行为。
 - [`integration-and-fault-drills.md`](integration-and-fault-drills.md)：隔离运行 PostgreSQL、Redis、Redpanda、完整 API 的集成验收和 readiness 故障演练。
 - [`database-migration-and-recovery.md`](database-migration-and-recovery.md)：迁移不可变规则、Expand/Contract、备份恢复验收和应用回滚处置矩阵。
+- [`performance-baseline.md`](performance-baseline.md)：隔离基础设施中的 HTTP 性能基线、阈值、参数覆盖和结果解读。
