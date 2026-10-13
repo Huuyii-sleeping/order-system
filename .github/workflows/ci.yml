@@ -58,3 +58,21 @@ jobs:
 
       - name: Build application image
         run: docker build --pull --tag order-system:ci .
+
+  integration:
+    name: Real infrastructure integration
+    needs: [container]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run integration and dependency outage checks
+        run: make integration-check

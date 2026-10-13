@@ -47,7 +47,7 @@ services:
       SHUTDOWN_TIMEOUT: 10s
       SHUTDOWN_DRAIN_DELAY: 2s
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -74,7 +74,7 @@ services:
       POSTGRES_USER: order_system
       POSTGRES_PASSWORD: order_system
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -89,14 +89,14 @@ services:
       - redpanda
       - start
       - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:${KAFKA_HOST_PORT:-19092}
       - --rpc-addr=redpanda:33145
       - --advertise-rpc-addr=redpanda:33145
       - --mode=dev-container
       - --smp=1
       - --default-log-level=info
     ports:
-      - "127.0.0.1:19092:19092"
+      - "127.0.0.1:${KAFKA_HOST_PORT:-19092}:19092"
     volumes:
       - redpanda-data:/var/lib/redpanda/data
     healthcheck:
@@ -109,7 +109,7 @@ services:
     image: redis:7.4.11-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:

@@ -1,7 +1,8 @@
-.PHONY: fmt fmt-check test race vet check ci db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
+.PHONY: fmt fmt-check test race vet check ci integration-check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration test-e2e run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
 
 DATABASE_URL ?= postgres://order_system:order_system@127.0.0.1:5432/order_system?sslmode=disable
 REDIS_URL ?= redis://127.0.0.1:6379/0
+API_URL ?= http://127.0.0.1:8080
 
 fmt:
 	gofmt -w .
@@ -21,6 +22,9 @@ vet:
 check: test race vet
 
 ci: fmt-check check observability-check
+
+integration-check:
+	bash scripts/integration-check.sh
 
 db-up:
 	docker compose up -d --wait postgres
@@ -95,6 +99,9 @@ test-kafka-integration:
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.poison --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 	docker compose exec -T redpanda rpk topic create orders.created.v1.integration.dlq --partitions 1 --replicas 1 --topic-config retention.ms=3600000 --if-not-exists
 	TEST_KAFKA_BROKERS='127.0.0.1:19092' go test -race -count=1 ./internal/adapters/messaging
+
+test-e2e:
+	TEST_API_URL='$(API_URL)' go test -count=1 ./tests/e2e
 
 run-postgres:
 	STORAGE_DRIVER=postgres DATABASE_URL='$(DATABASE_URL)' go run ./cmd/api

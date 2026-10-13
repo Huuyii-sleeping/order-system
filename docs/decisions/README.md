@@ -20,3 +20,4 @@
 - [`0020-expired-credential-cleanup.md`](0020-expired-credential-cleanup.md)：过期认证凭证使用有界批量删除和独立维护 Worker 回收。
 - [`0021-auth-credential-cleanup-observability.md`](0021-auth-credential-cleanup-observability.md)：为认证凭证维护任务增加低基数指标、最近成功时间和 Prometheus 告警。
 - [`0022-ci-release-gates.md`](0022-ci-release-gates.md)：通过 CI 分层执行 Go、观测配置和容器构建门禁，保持检查与部署的授权边界。
+- [`0023-real-infrastructure-integration.md`](0023-real-infrastructure-integration.md)：使用隔离容器执行真实适配器测试、HTTP 黑盒 E2E 和依赖故障演练。

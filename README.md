@@ -371,7 +371,17 @@ make ci
 ```
 
 仓库中的 CI 还会在代码和观测检查通过后构建 Docker 镜像。CI 只负责验证，不会自动
-部署或推送镜像；需要 PostgreSQL、Redis 或 Kafka 的集成检查仍通过对应的基础设施
-命令显式执行。
+部署或推送镜像。
+
+在隔离的 PostgreSQL、Redis、Redpanda 和完整 API 容器上执行适配器测试、HTTP 黑盒
+订单生命周期，以及依赖中断时的 readiness 恢复演练：
+
+```bash
+make integration-check
+```
+
+该命令使用独立 Compose Project 和临时数据卷，结束时自动清理；详细范围和端口覆盖
+方式见 [`docs/runbooks/integration-and-fault-drills.md`](docs/runbooks/integration-and-fault-drills.md)。
+远程 CI 把它放在独立 Integration Job 中，和快速单元测试分层执行。
 
 项目结构和依赖方向见 `docs/architecture/project-structure.md`。

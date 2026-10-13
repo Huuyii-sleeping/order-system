@@ -92,6 +92,16 @@ func (r *CatalogRepository) GetByID(ctx context.Context, productID string) (cata
 		loadContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.loadTimeout)
 		defer cancel()
 
+		// 外层 miss 和进入 singleflight 之间存在调度窗口：前一个加载可能已经
+		// 写回缓存并退出，而当前请求刚刚成为下一轮 leader。这里再次检查缓存，
+		// 避免紧邻的两轮请求重复回源。内部检查不重复记录请求级缓存指标。
+		if cached, found, err := r.read(loadContext, key); err == nil {
+			if found {
+				return cached, nil
+			}
+			return catalog.Product{}, catalog.ErrProductNotFound
+		}
+
 		product, err := r.source.GetByID(loadContext, productID)
 		if errors.Is(err, catalog.ErrProductNotFound) {
 			r.writeBestEffort(loadContext, key, cachedProduct{Found: false}, r.notFoundTTL)
