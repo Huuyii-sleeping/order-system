@@ -27,7 +27,7 @@ func WithAuthentication(authenticator SessionAuthenticator, next http.Handler) h
 			return
 		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
+			writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 			return
 		}
 
@@ -51,5 +51,5 @@ func bearerToken(header string) (string, bool) {
 
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
-	writeError(w, http.StatusUnauthorized, "invalid or missing bearer token")
+	writeError(w, http.StatusUnauthorized, errorCodeInvalidBearerToken, "invalid or missing bearer token")
 }

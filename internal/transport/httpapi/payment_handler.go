@@ -34,11 +34,11 @@ func (h *paymentHandler) getByOrderID(w http.ResponseWriter, r *http.Request) {
 
 	got, err := h.queries.GetPayment(r.Context(), customerID, r.PathValue("orderID"))
 	if errors.Is(err, payment.ErrPaymentNotFound) {
-		writeError(w, http.StatusNotFound, "payment not found")
+		writeError(w, http.StatusNotFound, errorCodePaymentNotFound, "payment not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 

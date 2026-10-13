@@ -30,7 +30,7 @@ func WithRateLimit(limiter RequestRateLimiter, next http.Handler) http.Handler {
 			// 认证入口的共享限流器不可用时选择 fail closed。否则 Redis
 			// 故障会悄悄移除暴力破解保护。响应不暴露底层连接信息。
 			w.Header().Set("Retry-After", "1")
-			writeError(w, http.StatusServiceUnavailable, "service temporarily unavailable")
+			writeError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, "service temporarily unavailable")
 			return
 		}
 		if !allowed {
@@ -39,7 +39,7 @@ func WithRateLimit(limiter RequestRateLimiter, next http.Handler) http.Handler {
 				seconds = 1
 			}
 			w.Header().Set("Retry-After", strconv.Itoa(seconds))
-			writeError(w, http.StatusTooManyRequests, "too many requests")
+			writeError(w, http.StatusTooManyRequests, errorCodeRateLimited, "too many requests")
 			return
 		}
 		next.ServeHTTP(w, r)

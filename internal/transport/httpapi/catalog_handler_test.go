@@ -97,7 +97,7 @@ func TestCatalogHandlerHidesInternalError(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
-	if response.Body.String() != "{\"error\":\"internal server error\"}\n" {
+	if response.Body.String() != "{\"code\":\"internal_error\",\"error\":\"internal server error\"}\n" {
 		t.Fatalf("response body = %q", response.Body.String())
 	}
 }

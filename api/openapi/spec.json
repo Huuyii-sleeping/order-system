@@ -1,0 +1,597 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Order System HTTP API",
+    "version": "1.0.0",
+    "description": "Public HTTP contract for the learning order system. Error responses keep the legacy error message and add a stable machine-readable code."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8080",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {"name": "operations"},
+    {"name": "catalog"},
+    {"name": "authentication"},
+    {"name": "orders"},
+    {"name": "integrations"}
+  ],
+  "paths": {
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPISpec",
+        "tags": ["operations"],
+        "summary": "Read the OpenAPI contract",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OpenAPI JSON document",
+            "content": {
+              "application/vnd.oai.openapi+json": {
+                "schema": {"type": "object", "additionalProperties": true}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "getHealth",
+        "tags": ["operations"],
+        "summary": "Check process liveness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/StatusResponse"},
+                "example": {"status": "ok"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "getReadiness",
+        "tags": ["operations"],
+        "summary": "Check whether the instance can receive traffic",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Instance is ready",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/StatusResponse"},
+                "example": {"status": "ready"}
+              }
+            }
+          },
+          "503": {
+            "description": "Instance is draining or a required dependency is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/StatusResponse"},
+                "example": {"status": "unavailable"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/products": {
+      "get": {
+        "operationId": "listProducts",
+        "tags": ["catalog"],
+        "summary": "List products",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Product list",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProductList"}}}
+          },
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/products/{productID}": {
+      "get": {
+        "operationId": "getProduct",
+        "tags": ["catalog"],
+        "summary": "Get a product",
+        "security": [],
+        "parameters": [
+          {"$ref": "#/components/parameters/ProductID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Product",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Product"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "operationId": "registerUser",
+        "tags": ["authentication"],
+        "summary": "Register a user",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CredentialsRequest"}}}
+        },
+        "responses": {
+          "201": {
+            "description": "User created",
+            "headers": {
+              "Location": {"description": "Created user resource", "schema": {"type": "string"}}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/User"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "415": {"$ref": "#/components/responses/UnsupportedMediaType"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "tags": ["authentication"],
+        "summary": "Create access and refresh credentials",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CredentialsRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Login succeeded. Refresh and CSRF tokens are set as cookies.",
+            "headers": {
+              "Set-Cookie": {"description": "refresh_token and csrf_token cookies", "schema": {"type": "string"}}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LoginResponse"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "429": {"$ref": "#/components/responses/RateLimited"},
+          "415": {"$ref": "#/components/responses/UnsupportedMediaType"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/ServiceUnavailable"}
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "refreshAccessToken",
+        "tags": ["authentication"],
+        "summary": "Rotate the refresh token and issue a new access token",
+        "security": [
+          {"refreshCookie": [], "csrfCookie": [], "csrfHeader": []}
+        ],
+        "responses": {
+          "200": {
+            "description": "Credentials rotated",
+            "headers": {
+              "Set-Cookie": {"description": "Rotated refresh_token and csrf_token cookies", "schema": {"type": "string"}}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RefreshResponse"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "429": {"$ref": "#/components/responses/RateLimited"},
+          "500": {"$ref": "#/components/responses/InternalError"},
+          "503": {"$ref": "#/components/responses/ServiceUnavailable"}
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "tags": ["authentication"],
+        "summary": "Revoke the current access session",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "204": {"description": "Session revoked"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/auth/logout-all": {
+      "post": {
+        "operationId": "logoutAll",
+        "tags": ["authentication"],
+        "summary": "Revoke all sessions for the authenticated user",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "204": {"description": "All sessions revoked"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/orders": {
+      "get": {
+        "operationId": "listOrders",
+        "tags": ["orders"],
+        "summary": "List the authenticated user's orders with keyset pagination",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the preceding page",
+            "schema": {"type": "string", "maxLength": 1024}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order page",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OrderList"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      },
+      "post": {
+        "operationId": "createOrder",
+        "tags": ["orders"],
+        "summary": "Create an order idempotently",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/IdempotencyKey"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateOrderRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Existing order returned for the same idempotency key and request",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Order"}}}
+          },
+          "201": {
+            "description": "Order created",
+            "headers": {
+              "Location": {"description": "Created order resource", "schema": {"type": "string"}}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Order"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "415": {"$ref": "#/components/responses/UnsupportedMediaType"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/orders/{orderID}": {
+      "get": {
+        "operationId": "getOrder",
+        "tags": ["orders"],
+        "summary": "Get an order owned by the authenticated user",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/OrderID"}],
+        "responses": {
+          "200": {
+            "description": "Order",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Order"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/orders/{orderID}/payment": {
+      "get": {
+        "operationId": "getOrderPayment",
+        "tags": ["orders"],
+        "summary": "Get payment state for an owned order",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/OrderID"}],
+        "responses": {
+          "200": {
+            "description": "Payment state",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Payment"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/orders/{orderID}/notification": {
+      "get": {
+        "operationId": "getOrderNotification",
+        "tags": ["orders"],
+        "summary": "Get notification state for an owned order",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/OrderID"}],
+        "responses": {
+          "200": {
+            "description": "Notification state",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Notification"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/webhooks/notifications/provider": {
+      "post": {
+        "operationId": "receiveNotificationWebhook",
+        "tags": ["integrations"],
+        "summary": "Receive a signed notification provider result",
+        "description": "The signature is HMAC-SHA256 over timestamp + '.' + the exact raw request body.",
+        "security": [{"webhookTimestamp": [], "webhookSignature": []}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationWebhookRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook accepted or recognized as a duplicate",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationWebhookResponse"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "415": {"$ref": "#/components/responses/UnsupportedMediaType"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "opaque"},
+      "refreshCookie": {"type": "apiKey", "in": "cookie", "name": "refresh_token"},
+      "csrfCookie": {"type": "apiKey", "in": "cookie", "name": "csrf_token"},
+      "csrfHeader": {"type": "apiKey", "in": "header", "name": "X-CSRF-Token"},
+      "webhookTimestamp": {"type": "apiKey", "in": "header", "name": "X-Webhook-Timestamp"},
+      "webhookSignature": {"type": "apiKey", "in": "header", "name": "X-Webhook-Signature"}
+    },
+    "parameters": {
+      "ProductID": {
+        "name": "productID",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1}
+      },
+      "OrderID": {
+        "name": "orderID",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1}
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1}
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Request is malformed or violates an input rule",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "Unauthorized": {
+        "description": "Credentials or request signature are invalid",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "Forbidden": {
+        "description": "CSRF validation failed",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "NotFound": {
+        "description": "Resource was not found or is not owned by the authenticated user",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "Conflict": {
+        "description": "Request conflicts with current state or an earlier idempotent request",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "RateLimited": {
+        "description": "Rate limit exceeded",
+        "headers": {
+          "Retry-After": {"description": "Seconds before retrying", "schema": {"type": "integer", "minimum": 1}}
+        },
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "UnsupportedMediaType": {
+        "description": "Content-Type must be application/json",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "InternalError": {
+        "description": "Unexpected server failure",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      },
+      "ServiceUnavailable": {
+        "description": "Required protection or dependency is unavailable",
+        "headers": {
+          "Retry-After": {"description": "Seconds before retrying", "schema": {"type": "integer", "minimum": 1}}
+        },
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "error"],
+        "properties": {
+          "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "Stable machine-readable error code"},
+          "error": {"type": "string", "description": "Human-readable message; clients must not branch on this value"}
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {"status": {"type": "string"}}
+      },
+      "CredentialsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email", "password"],
+        "properties": {
+          "email": {"type": "string", "format": "email", "maxLength": 254},
+          "password": {"type": "string", "minLength": 8, "maxLength": 72, "writeOnly": true}
+        }
+      },
+      "User": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "email", "created_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "email": {"type": "string", "format": "email"},
+          "created_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["access_token", "token_type", "expires_at", "user"],
+        "properties": {
+          "access_token": {"type": "string", "minLength": 1},
+          "token_type": {"type": "string", "const": "Bearer"},
+          "expires_at": {"type": "string", "format": "date-time"},
+          "user": {"$ref": "#/components/schemas/User"}
+        }
+      },
+      "RefreshResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["access_token", "token_type", "expires_at"],
+        "properties": {
+          "access_token": {"type": "string", "minLength": 1},
+          "token_type": {"type": "string", "const": "Bearer"},
+          "expires_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "Product": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "price_cents"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "name": {"type": "string", "minLength": 1},
+          "price_cents": {"type": "integer", "format": "int64", "minimum": 1}
+        }
+      },
+      "ProductList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Product"}}
+        }
+      },
+      "CreateOrderRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["product_id", "quantity"],
+        "properties": {
+          "product_id": {"type": "string", "minLength": 1},
+          "quantity": {"type": "integer", "minimum": 1}
+        }
+      },
+      "Order": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "customer_id", "product_id", "quantity", "unit_price_cents", "total_cents", "status", "created_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "customer_id": {"type": "string", "minLength": 1},
+          "product_id": {"type": "string", "minLength": 1},
+          "quantity": {"type": "integer", "minimum": 1},
+          "unit_price_cents": {"type": "integer", "format": "int64", "minimum": 1},
+          "total_cents": {"type": "integer", "format": "int64", "minimum": 1},
+          "status": {"type": "string", "enum": ["pending", "confirmed", "cancelled"]},
+          "created_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "OrderList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "next_cursor"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Order"}},
+          "next_cursor": {"type": "string", "description": "Empty on the final page"}
+        }
+      },
+      "Payment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "order_id", "amount_cents", "status", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "order_id": {"type": "string", "minLength": 1},
+          "amount_cents": {"type": "integer", "format": "int64", "minimum": 1},
+          "status": {"type": "string", "enum": ["pending", "processing", "succeeded", "failed", "unknown"]},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "order_id", "event_type", "status", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "order_id": {"type": "string", "minLength": 1},
+          "event_type": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["pending", "processing", "sent", "failed", "unknown"]},
+          "created_at": {"type": "string", "format": "date-time"},
+          "updated_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "NotificationWebhookRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "notification_id", "idempotency_key", "status"],
+        "properties": {
+          "event_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "notification_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+          "status": {"type": "string", "enum": ["succeeded", "rejected"]},
+          "provider_reference": {"type": "string", "maxLength": 500},
+          "reason": {"type": "string", "maxLength": 1000}
+        }
+      },
+      "NotificationWebhookResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "processed"],
+        "properties": {
+          "status": {"type": "string", "enum": ["sent", "failed"]},
+          "processed": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

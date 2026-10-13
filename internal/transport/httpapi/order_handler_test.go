@@ -147,14 +147,15 @@ func TestCreateOrderMapsBusinessErrors(t *testing.T) {
 		name       string
 		err        error
 		wantStatus int
+		wantCode   string
 		wantBody   string
 	}{
-		{name: "invalid input", err: order.ErrInvalidQuantity, wantStatus: http.StatusBadRequest, wantBody: "quantity must be greater than zero"},
-		{name: "missing idempotency key", err: order.ErrInvalidIdempotencyKey, wantStatus: http.StatusBadRequest, wantBody: "idempotency key is required"},
-		{name: "product not found", err: catalog.ErrProductNotFound, wantStatus: http.StatusNotFound, wantBody: "product not found"},
-		{name: "insufficient stock", err: inventory.ErrInsufficientStock, wantStatus: http.StatusConflict, wantBody: "insufficient stock"},
-		{name: "idempotency conflict", err: orderapp.ErrIdempotencyConflict, wantStatus: http.StatusConflict, wantBody: "idempotency key conflict"},
-		{name: "internal error", err: errors.New("database password leaked"), wantStatus: http.StatusInternalServerError, wantBody: "internal server error"},
+		{name: "invalid input", err: order.ErrInvalidQuantity, wantStatus: http.StatusBadRequest, wantCode: "invalid_quantity", wantBody: "quantity must be greater than zero"},
+		{name: "missing idempotency key", err: order.ErrInvalidIdempotencyKey, wantStatus: http.StatusBadRequest, wantCode: "idempotency_key_required", wantBody: "idempotency key is required"},
+		{name: "product not found", err: catalog.ErrProductNotFound, wantStatus: http.StatusNotFound, wantCode: "product_not_found", wantBody: "product not found"},
+		{name: "insufficient stock", err: inventory.ErrInsufficientStock, wantStatus: http.StatusConflict, wantCode: "insufficient_stock", wantBody: "insufficient stock"},
+		{name: "idempotency conflict", err: orderapp.ErrIdempotencyConflict, wantStatus: http.StatusConflict, wantCode: "idempotency_key_conflict", wantBody: "idempotency key conflict"},
+		{name: "internal error", err: errors.New("database password leaked"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error", wantBody: "internal server error"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			useCases := &orderUseCasesStub{createErr: tt.err}
@@ -165,7 +166,7 @@ func TestCreateOrderMapsBusinessErrors(t *testing.T) {
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status code = %d, want %d", response.Code, tt.wantStatus)
 			}
-			if response.Body.String() != `{"error":"`+tt.wantBody+`"}`+"\n" {
+			if response.Body.String() != `{"code":"`+tt.wantCode+`","error":"`+tt.wantBody+`"}`+"\n" {
 				t.Errorf("response body = %q", response.Body.String())
 			}
 		})

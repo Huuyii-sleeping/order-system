@@ -73,14 +73,14 @@ func newNotificationWebhookHandler(useCases NotificationWebhookUseCases, securit
 func (h *notificationWebhookHandler) receive(w http.ResponseWriter, r *http.Request) {
 	if !hasJSONContentType(r.Header.Get("Content-Type")) {
 		h.record("invalid_payload")
-		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		writeError(w, http.StatusUnsupportedMediaType, errorCodeContentTypeRequired, "content type must be application/json")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.record("invalid_payload")
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
 		return
 	}
 	if err := h.verify(r.Header.Get(WebhookTimestampHeader), r.Header.Get(WebhookSignatureHeader), body); err != nil {
@@ -89,7 +89,7 @@ func (h *notificationWebhookHandler) receive(w http.ResponseWriter, r *http.Requ
 		} else {
 			h.record("invalid_signature")
 		}
-		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
+		writeError(w, http.StatusUnauthorized, errorCodeInvalidWebhookSignature, "invalid webhook signature")
 		return
 	}
 
@@ -98,12 +98,12 @@ func (h *notificationWebhookHandler) receive(w http.ResponseWriter, r *http.Requ
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		h.record("invalid_payload")
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		h.record("invalid_payload")
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
 		return
 	}
 
@@ -162,16 +162,16 @@ func (h *notificationWebhookHandler) writeProcessError(w http.ResponseWriter, er
 	switch {
 	case errors.Is(err, notificationapp.ErrInvalidWebhookEvent):
 		h.record("invalid_payload")
-		writeError(w, http.StatusBadRequest, "invalid webhook event")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidWebhook, "invalid webhook event")
 	case errors.Is(err, domainnotification.ErrNotificationNotFound):
 		h.record("not_found")
-		writeError(w, http.StatusNotFound, "notification not found")
+		writeError(w, http.StatusNotFound, errorCodeNotificationNotFound, "notification not found")
 	case errors.Is(err, notificationapp.ErrWebhookEventConflict), errors.Is(err, notificationapp.ErrWebhookResultConflict):
 		h.record("conflict")
-		writeError(w, http.StatusConflict, "webhook event conflicts with existing result")
+		writeError(w, http.StatusConflict, errorCodeWebhookConflict, "webhook event conflicts with existing result")
 	default:
 		h.record("error")
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 	}
 }
 

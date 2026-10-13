@@ -31,11 +31,11 @@ func (h *notificationHandler) getByOrderID(w http.ResponseWriter, r *http.Reques
 	}
 	got, err := h.queries.GetNotification(r.Context(), customerID, r.PathValue("orderID"))
 	if errors.Is(err, domainnotification.ErrNotificationNotFound) {
-		writeError(w, http.StatusNotFound, "notification not found")
+		writeError(w, http.StatusNotFound, errorCodeNotificationNotFound, "notification not found")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 	_ = writeJSON(w, http.StatusOK, notificationResponse{ID: got.ID(), OrderID: got.OrderID(), EventType: got.EventType(), Status: got.Status(), CreatedAt: got.CreatedAt(), UpdatedAt: got.UpdatedAt()})

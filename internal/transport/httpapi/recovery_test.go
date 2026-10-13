@@ -58,6 +58,9 @@ func TestRecoveryReturnsInternalServerError(t *testing.T) {
 	if got := body["error"]; got != "internal server error" {
 		t.Errorf("error response = %q, want %q", got, "internal server error")
 	}
+	if got := body["code"]; got != "internal_error" {
+		t.Errorf("error code = %q, want %q", got, "internal_error")
+	}
 
 	logOutput := logBuffer.String()
 	for _, want := range []string{

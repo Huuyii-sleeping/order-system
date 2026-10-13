@@ -2,13 +2,16 @@
 
 ## 执行检查
 
-只运行事件契约测试：
+运行契约测试（包含事件和 HTTP API）：
 
 在仓库根目录执行：
 
 ```bash
 make contract-check
 ```
+
+事件契约用例位于 `tests/contract/events_test.go`；同一命令中的 HTTP 契约说明见
+`docs/runbooks/http-api-contracts.md`。
 
 完整 CI 仍然使用：
 

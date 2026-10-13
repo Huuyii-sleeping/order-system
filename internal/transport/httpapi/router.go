@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"example.com/order-system/api/openapi"
 	authapp "example.com/order-system/internal/application/auth"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/domain/catalog"
@@ -115,6 +116,10 @@ func NewRouterWithConfig(
 	config RouterConfig,
 ) http.Handler {
 	mux := http.NewServeMux()
+
+	// OpenAPI 文档与 CI 检查读取的是同一份嵌入文件，避免线上说明书和
+	// 仓库中接受评审的契约来自两套来源。
+	mux.Handle("GET /openapi.json", openapi.Handler())
 
 	// Go 1.22 之后可以在路由模式中同时声明 Method 和 Path。
 	// 因此 POST /healthz 会由标准库自动返回 405 Method Not Allowed。

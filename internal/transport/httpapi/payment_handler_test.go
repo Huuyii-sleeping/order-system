@@ -96,10 +96,11 @@ func TestGetPaymentByOrderMapsNotFoundAndInternalErrors(t *testing.T) {
 		name       string
 		err        error
 		wantStatus int
+		wantCode   string
 		wantBody   string
 	}{
-		{name: "not found", err: payment.ErrPaymentNotFound, wantStatus: http.StatusNotFound, wantBody: "payment not found"},
-		{name: "internal", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantBody: "internal server error"},
+		{name: "not found", err: payment.ErrPaymentNotFound, wantStatus: http.StatusNotFound, wantCode: "payment_not_found", wantBody: "payment not found"},
+		{name: "internal", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error", wantBody: "internal server error"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			router := httpapi.NewRouterWithConfig(
@@ -115,7 +116,7 @@ func TestGetPaymentByOrderMapsNotFoundAndInternalErrors(t *testing.T) {
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status code = %d, want %d", response.Code, tt.wantStatus)
 			}
-			want := `{"error":"` + tt.wantBody + `"}` + "\n"
+			want := `{"code":"` + tt.wantCode + `","error":"` + tt.wantBody + `"}` + "\n"
 			if response.Body.String() != want {
 				t.Errorf("response body = %q, want %q", response.Body.String(), want)
 			}

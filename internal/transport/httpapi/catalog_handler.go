@@ -32,7 +32,7 @@ type productListResponse struct {
 func (h *catalogHandler) list(w http.ResponseWriter, r *http.Request) {
 	products, err := h.queries.ListProducts(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -49,11 +49,11 @@ func (h *catalogHandler) getByID(w http.ResponseWriter, r *http.Request) {
 	product, err := h.queries.GetProduct(r.Context(), productID)
 	if err != nil {
 		if errors.Is(err, catalog.ErrProductNotFound) {
-			writeError(w, http.StatusNotFound, "product not found")
+			writeError(w, http.StatusNotFound, errorCodeProductNotFound, "product not found")
 			return
 		}
 
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -66,10 +66,4 @@ func productToResponse(product catalog.Product) productResponse {
 		Name:       product.Name(),
 		PriceCents: product.PriceCents(),
 	}
-}
-
-func writeError(w http.ResponseWriter, statusCode int, message string) {
-	_ = writeJSON(w, statusCode, map[string]string{
-		"error": message,
-	})
 }

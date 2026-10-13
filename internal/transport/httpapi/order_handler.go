@@ -59,13 +59,13 @@ func (h *orderHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !hasJSONContentType(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		writeError(w, http.StatusUnsupportedMediaType, errorCodeContentTypeRequired, "content type must be application/json")
 		return
 	}
 
 	var request createOrderRequest
 	if err := decodeJSONBody(w, r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
 		return
 	}
 
@@ -99,11 +99,11 @@ func (h *orderHandler) getByID(w http.ResponseWriter, r *http.Request) {
 	got, err := h.useCases.GetOrder(r.Context(), userID, r.PathValue("orderID"))
 	if err != nil {
 		if errors.Is(err, order.ErrOrderNotFound) {
-			writeError(w, http.StatusNotFound, "order not found")
+			writeError(w, http.StatusNotFound, errorCodeOrderNotFound, "order not found")
 			return
 		}
 
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -119,7 +119,7 @@ func (h *orderHandler) list(w http.ResponseWriter, r *http.Request) {
 
 	query, err := parseOrderListQuery(r, userID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid order list query")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidOrderListQuery, "invalid order list query")
 		return
 	}
 
@@ -127,9 +127,9 @@ func (h *orderHandler) list(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, orderapp.ErrInvalidListLimit), errors.Is(err, orderapp.ErrInvalidListCursor):
-			writeError(w, http.StatusBadRequest, "invalid order list query")
+			writeError(w, http.StatusBadRequest, errorCodeInvalidOrderListQuery, "invalid order list query")
 		default:
-			writeError(w, http.StatusInternalServerError, "internal server error")
+			writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		}
 		return
 	}
@@ -173,19 +173,19 @@ func parseOrderListQuery(r *http.Request, customerID string) (orderapp.ListOrder
 func writeCreateOrderError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, order.ErrInvalidProductID):
-		writeError(w, http.StatusBadRequest, "product_id is required")
+		writeError(w, http.StatusBadRequest, errorCodeProductIDRequired, "product_id is required")
 	case errors.Is(err, order.ErrInvalidQuantity):
-		writeError(w, http.StatusBadRequest, "quantity must be greater than zero")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidQuantity, "quantity must be greater than zero")
 	case errors.Is(err, order.ErrInvalidIdempotencyKey):
-		writeError(w, http.StatusBadRequest, "idempotency key is required")
+		writeError(w, http.StatusBadRequest, errorCodeIdempotencyKeyRequired, "idempotency key is required")
 	case errors.Is(err, catalog.ErrProductNotFound):
-		writeError(w, http.StatusNotFound, "product not found")
+		writeError(w, http.StatusNotFound, errorCodeProductNotFound, "product not found")
 	case errors.Is(err, inventory.ErrInsufficientStock):
-		writeError(w, http.StatusConflict, "insufficient stock")
+		writeError(w, http.StatusConflict, errorCodeInsufficientStock, "insufficient stock")
 	case errors.Is(err, orderapp.ErrIdempotencyConflict):
-		writeError(w, http.StatusConflict, "idempotency key conflict")
+		writeError(w, http.StatusConflict, errorCodeIdempotencyConflict, "idempotency key conflict")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 	}
 }
 

@@ -48,9 +48,7 @@ func WithRecovery(logger *slog.Logger, next http.Handler) http.Handler {
 				return
 			}
 
-			_ = writeJSON(w, http.StatusInternalServerError, map[string]string{
-				"error": "internal server error",
-			})
+			writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		}()
 
 		next.ServeHTTP(recorder, r)

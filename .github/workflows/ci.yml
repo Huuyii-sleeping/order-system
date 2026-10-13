@@ -59,7 +59,7 @@ jobs:
         run: make kubernetes-check
 
   contract:
-    name: Event contract checks
+    name: API and event contract checks
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -71,7 +71,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify versioned event contracts
+      - name: Verify HTTP and event contracts
         run: make contract-check
 
   container:

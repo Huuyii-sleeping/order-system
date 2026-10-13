@@ -424,15 +424,42 @@ make rollout-check
 兼容的新增字段需要显式评审；删除字段、改变类型或改变语义时，应创建新的 `v2` Topic 和事件类型，
 不能直接改变已经被消费者依赖的 `v1`。
 
-只运行事件契约检查：
+运行 HTTP 和事件契约检查：
 
 ```bash
 make contract-check
 ```
 
-这项检查不需要 PostgreSQL、Redis、Kafka 或 Kubernetes；它只验证 JSON 契约，不替代 Outbox、
-Inbox、Broker 投递和消费者事务测试。维护步骤见
+这项检查不需要 PostgreSQL、Redis、Kafka 或 Kubernetes；它验证静态协议和 HTTP 路由边界，
+不替代 Outbox、Inbox、Broker 投递、消费者事务或 HTTP E2E 测试。事件维护步骤见
 [`docs/runbooks/event-contracts.md`](docs/runbooks/event-contracts.md)。
+
+## HTTP API 契约与稳定错误码
+
+机器可读的 OpenAPI 3.1 契约位于 `api/openapi/spec.json`。应用会把完全相同的文件嵌入二进制，
+并通过以下地址返回，避免仓库说明书和运行时说明书来自两套来源：
+
+```bash
+curl http://127.0.0.1:8080/openapi.json
+```
+
+契约覆盖业务路由、请求参数、认证方式、成功响应、错误响应以及支付和通知的敏感字段边界。
+业务错误同时返回稳定机器码和可读文案：
+
+```json
+{
+  "code": "payment_not_found",
+  "error": "payment not found"
+}
+```
+
+客户端应根据 HTTP 状态码和 `code` 做逻辑分支，不应解析 `error` 英文文案。新增可选字段仍需
+评审；删除字段、重命名、改类型、改含义、改认证方式或改错误码属于破坏性变更，需要版本化或
+明确迁移周期。
+
+`make contract-check` 会同时验证 HTTP 和事件契约；HTTP 部分还会把 OpenAPI 中的每个操作交给
+真实 Router 探测，防止说明书声明不存在的路由。维护步骤和失败排查见
+[`docs/runbooks/http-api-contracts.md`](docs/runbooks/http-api-contracts.md)。
 
 ## Kubernetes 部署基线
 

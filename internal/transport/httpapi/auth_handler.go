@@ -78,13 +78,13 @@ func (h *authHandler) register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, identity.ErrInvalidEmail):
-			writeError(w, http.StatusBadRequest, "email is invalid")
+			writeError(w, http.StatusBadRequest, errorCodeInvalidEmail, "email is invalid")
 		case errors.Is(err, identity.ErrInvalidPassword):
-			writeError(w, http.StatusBadRequest, "password must be between 8 and 72 bytes")
+			writeError(w, http.StatusBadRequest, errorCodeInvalidPassword, "password must be between 8 and 72 bytes")
 		case errors.Is(err, identity.ErrEmailAlreadyExists):
-			writeError(w, http.StatusConflict, "email already exists")
+			writeError(w, http.StatusConflict, errorCodeEmailAlreadyExists, "email already exists")
 		default:
-			writeError(w, http.StatusInternalServerError, "internal server error")
+			writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		}
 		return
 	}
@@ -100,7 +100,7 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	csrfToken, err := newCSRFToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -108,11 +108,11 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 		Email: request.Email, Password: request.Password,
 	})
 	if errors.Is(err, authapp.ErrInvalidCredentials) {
-		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		writeError(w, http.StatusUnauthorized, errorCodeInvalidCredentials, "invalid email or password")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -131,29 +131,29 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 
 func (h *authHandler) refresh(w http.ResponseWriter, r *http.Request) {
 	if !validCSRFToken(r) {
-		writeError(w, http.StatusForbidden, "invalid or missing CSRF token")
+		writeError(w, http.StatusForbidden, errorCodeInvalidCSRFToken, "invalid or missing CSRF token")
 		return
 	}
 	csrfToken, err := newCSRFToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
 	cookie, err := r.Cookie(refreshCookieName)
 	if err != nil || cookie.Value == "" {
-		writeError(w, http.StatusUnauthorized, "invalid or missing refresh token")
+		writeError(w, http.StatusUnauthorized, errorCodeInvalidRefreshToken, "invalid or missing refresh token")
 		return
 	}
 
 	result, err := h.useCases.Refresh(r.Context(), cookie.Value)
 	if errors.Is(err, authapp.ErrInvalidRefresh) {
 		clearAuthCookies(w, h.secureCookie)
-		writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+		writeError(w, http.StatusUnauthorized, errorCodeInvalidRefreshToken, "invalid or expired refresh token")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -184,7 +184,7 @@ func (h *authHandler) logout(w http.ResponseWriter, r *http.Request) {
 			writeUnauthorized(w)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -204,7 +204,7 @@ func (h *authHandler) logoutAll(w http.ResponseWriter, r *http.Request) {
 			writeUnauthorized(w)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, http.StatusInternalServerError, errorCodeInternalError, "internal server error")
 		return
 	}
 
@@ -214,13 +214,13 @@ func (h *authHandler) logoutAll(w http.ResponseWriter, r *http.Request) {
 
 func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentialsRequest, bool) {
 	if !hasJSONContentType(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		writeError(w, http.StatusUnsupportedMediaType, errorCodeContentTypeRequired, "content type must be application/json")
 		return credentialsRequest{}, false
 	}
 
 	var request credentialsRequest
 	if err := decodeJSONBody(w, r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
 		return credentialsRequest{}, false
 	}
 	return request, true
