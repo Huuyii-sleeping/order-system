@@ -23,3 +23,4 @@
 - [`0023-real-infrastructure-integration.md`](0023-real-infrastructure-integration.md)：使用隔离容器执行真实适配器测试、HTTP 黑盒 E2E 和依赖故障演练。
 - [`0024-forward-migrations-and-recovery.md`](0024-forward-migrations-and-recovery.md)：使用迁移 checksum、Expand/Contract 和真实备份恢复建立安全发布回滚边界。
 - [`0025-capacity-baseline-and-load-check.md`](0025-capacity-baseline-and-load-check.md)：使用隔离基础设施建立固定并发 HTTP 性能基线，区分回归检查与生产容量规划。
+- [`0026-canary-rollout-and-rollback.md`](0026-canary-rollout-and-rollback.md)：通过 readiness、灰度流量和旧实例保活建立应用发布与回滚边界。

@@ -407,4 +407,14 @@ make performance-check
 明显性能回归，不代表生产容量；详细参数和边界见
 [`docs/runbooks/performance-baseline.md`](docs/runbooks/performance-baseline.md)。
 
+执行本地灰度发布与应用回滚演练：
+
+```bash
+make rollout-check
+```
+
+它会先启动旧版本，再等待新版本 readiness，通过少量 canary 请求后停止新版本，验证旧版本
+仍然能够服务。脚本使用内存模式和独立端口，不连接已有基础设施；真实发布边界见
+[`docs/runbooks/rollout-and-rollback.md`](docs/runbooks/rollout-and-rollback.md)。
+
 项目结构和依赖方向见 `docs/architecture/project-structure.md`。

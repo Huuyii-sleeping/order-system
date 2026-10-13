@@ -112,3 +112,21 @@ jobs:
 
       - name: Run isolated performance baseline
         run: make performance-check
+
+  rollout:
+    name: Rollout and rollback smoke check
+    needs: [go]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify local rollout and rollback sequence
+        run: make rollout-check

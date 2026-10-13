@@ -12,3 +12,4 @@
 - [`integration-and-fault-drills.md`](integration-and-fault-drills.md)：隔离运行 PostgreSQL、Redis、Redpanda、完整 API 的集成验收和 readiness 故障演练。
 - [`database-migration-and-recovery.md`](database-migration-and-recovery.md)：迁移不可变规则、Expand/Contract、备份恢复验收和应用回滚处置矩阵。
 - [`performance-baseline.md`](performance-baseline.md)：隔离基础设施中的 HTTP 性能基线、阈值、参数覆盖和结果解读。
+- [`rollout-and-rollback.md`](rollout-and-rollback.md)：灰度发布、readiness 门禁、回滚演练和生产排查顺序。
