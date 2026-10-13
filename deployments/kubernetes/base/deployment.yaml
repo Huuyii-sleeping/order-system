@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-system
+  labels:
+    app.kubernetes.io/name: order-system
+    app.kubernetes.io/part-of: order-system
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  minReadySeconds: 10
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 新 Pod 通过 readiness 后才逐步替换旧 Pod，避免发布时没有可用实例。
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: order-system
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: order-system
+        app.kubernetes.io/part-of: order-system
+    spec:
+      serviceAccountName: order-system
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # 发布前必须由 CI 或部署工具替换为不可变镜像 tag/digest。
+          image: order-system:replace-me
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: order-system-runtime
+          env:
+            # 连接串和 Webhook 密钥不能进入 ConfigMap 或 Git。
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: order-system-runtime
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: order-system-runtime
+                  key: REDIS_URL
+            - name: NOTIFICATION_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: order-system-runtime
+                  key: NOTIFICATION_WEBHOOK_SECRET
+          resources:
+            # 这里只是本地/学习基线，生产值需要根据容量测试和 SLO 调整。
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 3
+            successThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3

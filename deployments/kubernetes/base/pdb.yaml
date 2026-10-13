@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order-system
+  labels:
+    app.kubernetes.io/name: order-system
+spec:
+  # 节点维护或集群驱逐时至少保留一个可服务副本。
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: order-system

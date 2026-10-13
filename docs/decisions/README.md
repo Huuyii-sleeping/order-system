@@ -24,3 +24,4 @@
 - [`0024-forward-migrations-and-recovery.md`](0024-forward-migrations-and-recovery.md)：使用迁移 checksum、Expand/Contract 和真实备份恢复建立安全发布回滚边界。
 - [`0025-capacity-baseline-and-load-check.md`](0025-capacity-baseline-and-load-check.md)：使用隔离基础设施建立固定并发 HTTP 性能基线，区分回归检查与生产容量规划。
 - [`0026-canary-rollout-and-rollback.md`](0026-canary-rollout-and-rollback.md)：通过 readiness、灰度流量和旧实例保活建立应用发布与回滚边界。
+- [`0027-kubernetes-deployment-baseline.md`](0027-kubernetes-deployment-baseline.md)：通过 Kustomize、探针、滚动更新、PDB 和 Secret 边界把应用发布基线交给 Kubernetes。

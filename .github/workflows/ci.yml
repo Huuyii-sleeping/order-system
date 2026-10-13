@@ -48,9 +48,19 @@ jobs:
       - name: Validate Prometheus and Tempo configuration
         run: make observability-check
 
+  kubernetes:
+    name: Kubernetes manifest checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Render Kubernetes manifests
+        run: make kubernetes-check
+
   container:
     name: Container build
-    needs: [go, observability]
+    needs: [go, observability, kubernetes]
     runs-on: ubuntu-latest
     steps:
       - name: Check out source

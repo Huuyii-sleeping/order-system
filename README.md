@@ -417,4 +417,22 @@ make rollout-check
 仍然能够服务。脚本使用内存模式和独立端口，不连接已有基础设施；真实发布边界见
 [`docs/runbooks/rollout-and-rollback.md`](docs/runbooks/rollout-and-rollback.md)。
 
+## Kubernetes 部署基线
+
+Kustomize 清单位于 `deployments/kubernetes/base`，包含 API Deployment、ClusterIP Service、
+`/healthz` 和 `/readyz` 探针、滚动更新、PodDisruptionBudget、非 root 容器安全边界以及
+ConfigMap/Secret 配置分离。它假设 PostgreSQL、Redis 和 Kafka Broker 已由独立基础设施提供，
+不在这个 API 清单中伪造生产数据库或消息集群。
+
+只做离线清单渲染：
+
+```bash
+make kubernetes-check
+```
+
+部署前必须把 `order-system:replace-me` 替换为不可变镜像 tag 或 digest，并在集群中创建
+`order-system-runtime` Secret。数据库迁移仍然是独立、可审计的发布步骤，不能依赖 API Pod
+启动时自动执行。完整步骤见
+[`docs/runbooks/kubernetes-deployment.md`](docs/runbooks/kubernetes-deployment.md)。
+
 项目结构和依赖方向见 `docs/architecture/project-structure.md`。
