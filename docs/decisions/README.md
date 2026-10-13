@@ -19,3 +19,4 @@
 - [`0019-order-keyset-pagination.md`](0019-order-keyset-pagination.md)：订单历史使用复合游标、Keyset Pagination 和匹配查询形状的索引。
 - [`0020-expired-credential-cleanup.md`](0020-expired-credential-cleanup.md)：过期认证凭证使用有界批量删除和独立维护 Worker 回收。
 - [`0021-auth-credential-cleanup-observability.md`](0021-auth-credential-cleanup-observability.md)：为认证凭证维护任务增加低基数指标、最近成功时间和 Prometheus 告警。
+- [`0022-ci-release-gates.md`](0022-ci-release-gates.md)：通过 CI 分层执行 Go、观测配置和容器构建门禁，保持检查与部署的授权边界。

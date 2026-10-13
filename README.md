@@ -364,4 +364,14 @@ Worker 在事务外调用模拟支付 Provider，并用稳定的支付 ID 作为
 make check
 ```
 
+执行与 CI 对齐的代码格式、测试、race、vet 以及 Prometheus/Tempo 配置检查：
+
+```bash
+make ci
+```
+
+仓库中的 CI 还会在代码和观测检查通过后构建 Docker 镜像。CI 只负责验证，不会自动
+部署或推送镜像；需要 PostgreSQL、Redis 或 Kafka 的集成检查仍通过对应的基础设施
+命令显式执行。
+
 项目结构和依赖方向见 `docs/architecture/project-structure.md`。

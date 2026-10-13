@@ -1,10 +1,13 @@
-.PHONY: fmt test race vet check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
+.PHONY: fmt fmt-check test race vet check ci db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
 
 DATABASE_URL ?= postgres://order_system:order_system@127.0.0.1:5432/order_system?sslmode=disable
 REDIS_URL ?= redis://127.0.0.1:6379/0
 
 fmt:
 	gofmt -w .
+
+fmt-check:
+	test -z "$$(gofmt -l .)"
 
 test:
 	go test ./...
@@ -16,6 +19,8 @@ vet:
 	go vet ./...
 
 check: test race vet
+
+ci: fmt-check check observability-check
 
 db-up:
 	docker compose up -d --wait postgres
