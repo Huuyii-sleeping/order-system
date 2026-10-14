@@ -19,3 +19,4 @@
 - [`database-connection-pool.md`](database-connection-pool.md)：数据库连接池预算、背压指标、饱和告警和调优排查顺序。
 - [`structured-logging.md`](structured-logging.md)：JSON 日志级别、Request/Trace 关联、敏感字段保护和排查步骤。
 - [`service-level-objectives.md`](service-level-objectives.md)：HTTP 可用性与延迟 SLO、错误预算燃烧率、告警处置和口径变更检查。
+- [`runtime-diagnostics.md`](runtime-diagnostics.md)：安全启用 pprof，采集 CPU、heap、goroutine、锁竞争和 Trace，并解释常见排障顺序。

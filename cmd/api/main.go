@@ -18,6 +18,7 @@ import (
 	outboxapp "example.com/order-system/internal/application/outbox"
 	paymentapp "example.com/order-system/internal/application/payment"
 	"example.com/order-system/internal/config"
+	platformdiagnostics "example.com/order-system/internal/platform/diagnostics"
 	platformlogging "example.com/order-system/internal/platform/logging"
 	platformmetrics "example.com/order-system/internal/platform/metrics"
 	"example.com/order-system/internal/platform/telemetry"
@@ -122,7 +123,25 @@ func run(logger *slog.Logger, cfg config.Config) error {
 		},
 		metricRegistry,
 	)
-	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+4)
+
+	var diagnosticsServer *platformdiagnostics.Server
+	if cfg.DiagnosticsEnabled {
+		diagnosticsServer, err = platformdiagnostics.New(platformdiagnostics.Config{
+			Address:              cfg.DiagnosticsAddr,
+			MutexProfileFraction: cfg.DiagnosticsMutexProfileFraction,
+			BlockProfileRate:     cfg.DiagnosticsBlockProfileRate,
+		})
+		if err != nil {
+			return fmt.Errorf("initialize runtime diagnostics: %w", err)
+		}
+		defer func() {
+			if closeErr := diagnosticsServer.Close(); closeErr != nil {
+				logger.Error("close runtime diagnostics failed", "error", closeErr)
+			}
+		}()
+	}
+
+	backgroundTasks := make([]app.BackgroundTask, 0, len(outboxWorkers)+5)
 	for index, worker := range outboxWorkers {
 		backgroundTasks = append(backgroundTasks, app.BackgroundTask{
 			Name: fmt.Sprintf("outbox-%d", index+1),
@@ -159,6 +178,20 @@ func run(logger *slog.Logger, cfg config.Config) error {
 			Run:  messageRuntime.RunConsumerGracefully,
 		},
 	)
+	if diagnosticsServer != nil {
+		backgroundTasks = append(backgroundTasks, app.BackgroundTask{
+			Name: "runtime-diagnostics",
+			Run: func(stopCtx, workCtx context.Context) error {
+				logger.Info(
+					"runtime diagnostics server starting",
+					"address", diagnosticsServer.Address(),
+					"mutex_profile_fraction", cfg.DiagnosticsMutexProfileFraction,
+					"block_profile_rate", cfg.DiagnosticsBlockProfileRate,
+				)
+				return diagnosticsServer.RunGracefully(stopCtx, workCtx)
+			},
+		})
+	}
 	backgroundRuntime := app.StartBackgroundRuntime(logger, backgroundTasks...)
 	defer func() {
 		backgroundRuntime.ForceStop()

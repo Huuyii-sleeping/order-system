@@ -3,6 +3,11 @@ bin/
 coverage.out
 *.test
 
+# Local Go runtime profiles can contain paths, symbols and stack traces.
+profiles/
+*.pprof
+trace.out
+
 # Local environment files
 .env
 .env.*

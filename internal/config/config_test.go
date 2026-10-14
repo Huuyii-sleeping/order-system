@@ -22,6 +22,10 @@ func TestLoad(t *testing.T) {
 		logLevel                            string
 		httpAddr                            string
 		otlpTraceEndpoint                   string
+		diagnosticsEnabled                  string
+		diagnosticsAddr                     string
+		diagnosticsMutexProfileFraction     string
+		diagnosticsBlockProfileRate         string
 		shutdownTimeout                     string
 		shutdownDrainDelay                  string
 		readinessTimeout                    string
@@ -379,8 +383,70 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name:                            "configures loopback runtime diagnostics",
+			diagnosticsEnabled:              "true",
+			diagnosticsAddr:                 "127.0.0.1:7070",
+			diagnosticsMutexProfileFraction: "5",
+			diagnosticsBlockProfileRate:     "1000000",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				DiagnosticsEnabled: true, DiagnosticsAddr: "127.0.0.1:7070",
+				DiagnosticsMutexProfileFraction: 5, DiagnosticsBlockProfileRate: 1000000,
+				ShutdownTimeout: 10 * time.Second, ReadinessTimeout: 2 * time.Second,
+				StorageDriver: config.StorageMemory, AccessTokenTTL: 15 * time.Minute,
+				RefreshTokenTTL: 30 * 24 * time.Hour, AuthRateWindow: time.Minute,
+				LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second,
+				OutboxRetryMax: time.Minute, PaymentPollInterval: time.Second,
+				PaymentBatchSize: 10, PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
+			},
+		},
+		{
+			name:               "accepts ipv6 loopback runtime diagnostics",
+			diagnosticsEnabled: "true", diagnosticsAddr: "[::1]:6060",
+			want: config.Config{
+				AppName: "order-system", HTTPAddr: ":8080",
+				DiagnosticsEnabled: true, DiagnosticsAddr: "[::1]:6060",
+				ShutdownTimeout: 10 * time.Second, ReadinessTimeout: 2 * time.Second,
+				StorageDriver: config.StorageMemory, AccessTokenTTL: 15 * time.Minute,
+				RefreshTokenTTL: 30 * 24 * time.Hour, AuthRateWindow: time.Minute,
+				LoginRateLimit: 10, RefreshRateLimit: 30, BcryptCost: 12,
+				OutboxPollInterval: time.Second, OutboxBatchSize: 20,
+				OutboxLeaseDuration: 30 * time.Second, OutboxRetryBase: time.Second,
+				OutboxRetryMax: time.Minute, PaymentPollInterval: time.Second,
+				PaymentBatchSize: 10, PaymentLeaseDuration: 30 * time.Second,
+				PaymentRetryBase: time.Second, PaymentRetryMax: time.Minute,
+			},
+		},
+		{
 			name: "rejects unsupported log level", logLevel: "verbose",
 			wantErrorContains: "unsupported LOG_LEVEL",
+		},
+		{
+			name: "rejects invalid diagnostics enabled flag", diagnosticsEnabled: "sometimes",
+			wantErrorContains: "parse DIAGNOSTICS_ENABLED",
+		},
+		{
+			name: "rejects wildcard diagnostics address", diagnosticsEnabled: "true",
+			diagnosticsAddr: "0.0.0.0:6060", wantErrorContains: "explicit loopback IP",
+		},
+		{
+			name: "rejects diagnostics hostname", diagnosticsEnabled: "true",
+			diagnosticsAddr: "localhost:6060", wantErrorContains: "explicit loopback IP",
+		},
+		{
+			name: "rejects zero diagnostics port", diagnosticsEnabled: "true",
+			diagnosticsAddr: "127.0.0.1:0", wantErrorContains: "port between 1 and 65535",
+		},
+		{
+			name:                            "rejects negative mutex profile fraction",
+			diagnosticsMutexProfileFraction: "-1", wantErrorContains: "DIAGNOSTICS_MUTEX_PROFILE_FRACTION",
+		},
+		{
+			name:                        "rejects negative block profile rate",
+			diagnosticsBlockProfileRate: "-1", wantErrorContains: "DIAGNOSTICS_BLOCK_PROFILE_RATE",
 		},
 		{
 			name: "redis cache requires URL", cacheDriver: config.CacheRedis,
@@ -592,6 +658,10 @@ func TestLoad(t *testing.T) {
 			t.Setenv("LOG_LEVEL", tt.logLevel)
 			t.Setenv("HTTP_ADDR", tt.httpAddr)
 			t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", tt.otlpTraceEndpoint)
+			t.Setenv("DIAGNOSTICS_ENABLED", tt.diagnosticsEnabled)
+			t.Setenv("DIAGNOSTICS_ADDR", tt.diagnosticsAddr)
+			t.Setenv("DIAGNOSTICS_MUTEX_PROFILE_FRACTION", tt.diagnosticsMutexProfileFraction)
+			t.Setenv("DIAGNOSTICS_BLOCK_PROFILE_RATE", tt.diagnosticsBlockProfileRate)
 			t.Setenv("SHUTDOWN_TIMEOUT", tt.shutdownTimeout)
 			t.Setenv("SHUTDOWN_DRAIN_DELAY", tt.shutdownDrainDelay)
 			t.Setenv("READINESS_TIMEOUT", tt.readinessTimeout)
@@ -681,6 +751,9 @@ func TestLoad(t *testing.T) {
 			want := tt.want
 			if want.LogLevel == "" {
 				want.LogLevel = config.LogInfo
+			}
+			if want.DiagnosticsAddr == "" {
+				want.DiagnosticsAddr = "127.0.0.1:6060"
 			}
 			if want.ShutdownDrainDelay == 0 {
 				want.ShutdownDrainDelay = 2 * time.Second

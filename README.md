@@ -329,6 +329,25 @@ Grafana 展示最近 1h SLI、28d 剩余错误预算和当前燃烧率；本地 
 覆盖计算窗口。完整口径、公式和告警处置见
 [`docs/runbooks/service-level-objectives.md`](docs/runbooks/service-level-objectives.md)。
 
+## Go 运行时诊断与 pprof
+
+SLO、Metrics、Trace 和 Log 用于发现用户影响与定位请求链路；当问题进一步收敛为 CPU 飙高、
+内存增长、goroutine 泄漏或锁竞争时，可以临时启用 Go pprof：
+
+```bash
+DIAGNOSTICS_ENABLED=true go run ./cmd/api
+```
+
+诊断服务默认关闭，启用后默认只监听 `127.0.0.1:6060`，并使用独立 `ServeMux`，因此业务端口
+不会出现 `/debug/pprof/`。`DIAGNOSTICS_ADDR` 只接受显式 IPv4/IPv6 回环地址；`0.0.0.0`、
+`::`、主机名和普通网卡地址会在业务端口开始接流量前被拒绝。
+
+CPU、heap 和 goroutine Profile 不需要额外采样配置。mutex/block 采样默认关闭，排查时可临时设置
+`DIAGNOSTICS_MUTEX_PROFILE_FRACTION` 和 `DIAGNOSTICS_BLOCK_PROFILE_RATE`；正数越激进，运行时
+开销通常越高。Profile 可能包含函数名、调用栈、本机路径和启动参数，不应提交到仓库或开放到公网。
+采集、分析、Docker 内部抓取和排障流程见
+[`docs/runbooks/runtime-diagnostics.md`](docs/runbooks/runtime-diagnostics.md)。
+
 ## 使用 Prometheus、Tempo 和 Grafana
 
 应用在宿主机启动后，可以启动本地观测栈：

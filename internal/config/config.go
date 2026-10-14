@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -28,8 +29,12 @@ type Config struct {
 	AppName  string
 	LogLevel string
 
-	HTTPAddr          string
-	OTLPTraceEndpoint string
+	HTTPAddr                        string
+	OTLPTraceEndpoint               string
+	DiagnosticsEnabled              bool
+	DiagnosticsAddr                 string
+	DiagnosticsMutexProfileFraction int
+	DiagnosticsBlockProfileRate     int
 
 	ShutdownTimeout    time.Duration
 	ShutdownDrainDelay time.Duration
@@ -105,6 +110,7 @@ func Load() (Config, error) {
 		LogLevel:                       strings.ToLower(strings.TrimSpace(envOrDefault("LOG_LEVEL", LogInfo))),
 		HTTPAddr:                       envOrDefault("HTTP_ADDR", ":8080"),
 		OTLPTraceEndpoint:              strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")),
+		DiagnosticsAddr:                strings.TrimSpace(envOrDefault("DIAGNOSTICS_ADDR", "127.0.0.1:6060")),
 		ShutdownTimeout:                10 * time.Second,
 		ShutdownDrainDelay:             2 * time.Second,
 		ReadinessTimeout:               2 * time.Second,
@@ -165,6 +171,30 @@ func Load() (Config, error) {
 	case LogDebug, LogInfo, LogWarn, LogError:
 	default:
 		return Config{}, fmt.Errorf("unsupported LOG_LEVEL %q", cfg.LogLevel)
+	}
+	diagnosticsEnabled, err := loadBool("DIAGNOSTICS_ENABLED", cfg.DiagnosticsEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DiagnosticsEnabled = diagnosticsEnabled
+	diagnosticsMutexProfileFraction, err := loadNonNegativeInt(
+		"DIAGNOSTICS_MUTEX_PROFILE_FRACTION", cfg.DiagnosticsMutexProfileFraction,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DiagnosticsMutexProfileFraction = diagnosticsMutexProfileFraction
+	diagnosticsBlockProfileRate, err := loadNonNegativeInt(
+		"DIAGNOSTICS_BLOCK_PROFILE_RATE", cfg.DiagnosticsBlockProfileRate,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DiagnosticsBlockProfileRate = diagnosticsBlockProfileRate
+	if cfg.DiagnosticsEnabled {
+		if err := validateDiagnosticsAddress(cfg.DiagnosticsAddr); err != nil {
+			return Config{}, err
+		}
 	}
 
 	switch cfg.StorageDriver {
@@ -498,6 +528,22 @@ func loadNonNegativeInt(name string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s %q must not be negative", name, raw)
 	}
 	return value, nil
+}
+
+func validateDiagnosticsAddress(address string) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("parse DIAGNOSTICS_ADDR %q: %w", address, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("DIAGNOSTICS_ADDR %q must use an explicit loopback IP", address)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("DIAGNOSTICS_ADDR %q must use a port between 1 and 65535", address)
+	}
+	return nil
 }
 
 func envOrDefault(name string, fallback string) string {
