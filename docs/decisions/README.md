@@ -33,3 +33,4 @@
 - [`0033-secure-runtime-diagnostics.md`](0033-secure-runtime-diagnostics.md)：通过默认关闭、独立回环端口和受监管生命周期安全提供 Go pprof 运行时诊断。
 - [`0034-http-input-resource-bounds.md`](0034-http-input-resource-bounds.md)：通过 JSON body、HTTP Header 上限和明确 413 契约保护 HTTP 输入资源。
 - [`0035-go-fuzz-and-property-tests.md`](0035-go-fuzz-and-property-tests.md)：用 Go 原生 Fuzz Test 探索 JSON、分页和 Webhook 输入边界，并固定安全不变量。
+- [`0036-database-query-plans-and-n-plus-one.md`](0036-database-query-plans-and-n-plus-one.md)：用真实 PostgreSQL 执行计划回归保护订单列表索引，并建立 N+1 排查边界。

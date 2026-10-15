@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test race vet check ci contract-check integration-check database-recovery-check performance-check rollout-check kubernetes-check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration test-e2e run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
+.PHONY: fmt fmt-check test race vet check ci contract-check integration-check database-recovery-check database-query-plan-check performance-check rollout-check kubernetes-check db-up db-down db-migrate cache-up cache-down broker-up broker-down infra-up infra-down app-up app-down observability-check observability-up observability-down test-integration test-redis-integration test-kafka-integration test-e2e run-postgres run-postgres-redis run-kafka run-kafka-redis run-kafka-traced
 
 DATABASE_URL ?= postgres://order_system:order_system@127.0.0.1:5432/order_system?sslmode=disable
 REDIS_URL ?= redis://127.0.0.1:6379/0
@@ -106,6 +106,9 @@ db-migrate:
 
 test-integration:
 	TEST_DATABASE_URL='$(DATABASE_URL)' go test -race -count=1 ./internal/adapters/postgres
+
+database-query-plan-check:
+	TEST_DATABASE_URL='$(DATABASE_URL)' go test -race -count=1 ./internal/adapters/postgres -run TestIntegrationPostgresOrderListPlanUsesCompositeIndex
 
 test-redis-integration:
 	TEST_REDIS_URL='$(REDIS_URL)' go test -race -count=1 ./internal/adapters/redis

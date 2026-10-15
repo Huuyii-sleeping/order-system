@@ -22,3 +22,4 @@
 - [`runtime-diagnostics.md`](runtime-diagnostics.md)：安全启用 pprof，采集 CPU、heap、goroutine、锁竞争和 Trace，并解释常见排障顺序。
 - [`http-input-bounds.md`](http-input-bounds.md)：检查 JSON body、HTTP Header 的资源上限，并区分 400、413 和 431。
 - [`go-fuzz-tests.md`](go-fuzz-tests.md)：运行 Go Fuzz Test、保存最小回归样本并解释 fuzz 通过的边界。
+- [`database-query-plans.md`](database-query-plans.md)：运行 PostgreSQL 查询计划回归、阅读索引/顺序扫描，并排查 N+1。

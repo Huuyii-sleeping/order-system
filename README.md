@@ -205,7 +205,10 @@ curl 'http://127.0.0.1:8080/orders?limit=20&cursor=<next-cursor>' \
 列表使用 `(created_at DESC, id DESC)` 复合游标，而不是深分页 `OFFSET`。响应中的
 `next_cursor` 为空表示已经到达最后一页；它只是查询位置，不是认证凭据，客户端应当
 原样回传而不解析。服务始终从 Access Token 获取用户身份，因此不能用查询参数读取
-其他用户的订单。
+其他用户的订单。订单列表的 PostgreSQL 访问路径由
+`orders_customer_created_at_id_idx` 支撑；数据库集成测试会在 5,000 条订单上执行
+`EXPLAIN (FORMAT JSON)`，检查目标索引仍被使用且没有退化为 `Seq Scan`。运行方式和
+N+1 排查顺序见 [`docs/runbooks/database-query-plans.md`](docs/runbooks/database-query-plans.md)。
 
 订单创建后，支付会由消息消费者和后台 Worker 异步处理。使用同一个 Bearer Token
 查询当前用户订单对应的支付结果：
