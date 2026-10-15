@@ -527,6 +527,14 @@ curl http://127.0.0.1:8080/openapi.json
 资源。需要上传大文件或批量数据时，应设计独立的流式或异步导入接口，而不是提高 JSON 全局上限。
 边界验证和排查方法见 [`docs/runbooks/http-input-bounds.md`](docs/runbooks/http-input-bounds.md)。
 
+## Go Fuzz Test 与属性测试
+
+HTTP 输入边界另外由 Go 原生 Fuzz Test 探索：共享 JSON Decoder、订单 Keyset Pagination 查询
+和通知 Webhook 签名验证都要求任意输入不能 panic，不能突破 body/分页/认证边界。日常 `go test`
+会运行 fuzz seed；专项排查时可以使用 `-fuzztime=30s` 延长探索。Fuzz 只验证定义好的不变量，
+不替代数据库集成、HTTP E2E、性能基线和真实故障演练。运行方式见
+[`docs/runbooks/go-fuzz-tests.md`](docs/runbooks/go-fuzz-tests.md)。
+
 ## Kubernetes 部署基线
 
 Kustomize 清单位于 `deployments/kubernetes/base`，包含 API Deployment、ClusterIP Service、
