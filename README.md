@@ -160,6 +160,11 @@ make app-down
 Redpanda 对外只监听 `127.0.0.1:19092`。它实现 Kafka 协议，用于本地开发时
 减少运行成本；应用通过标准 Kafka 客户端接入，不依赖 Redpanda 专有 API。
 
+消息故障不通过直接删除 Inbox 或批量复制 DLQ 处理。`cmd/messageops` 提供精确 Outbox
+检查/重试、Inbox 只读检查和带原 Topic 白名单的 DLQ 重放；写操作要求操作人、原因和
+并发状态校验，并记录到 `message_recovery_actions`。完整流程见
+[`docs/runbooks/message-recovery.md`](docs/runbooks/message-recovery.md)。
+
 ## API 示例
 
 先注册用户：

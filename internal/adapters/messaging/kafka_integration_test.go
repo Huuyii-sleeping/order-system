@@ -267,6 +267,20 @@ func TestIntegrationKafkaMovesPoisonRecordToDeadLetterAndContinues(t *testing.T)
 	if got, err := uniqueHeader(deadLetter.Headers, deliveryAttemptsHeader); err != nil || got != "2" {
 		t.Fatalf("DLQ attempts = %q, %v; want 2, nil", got, err)
 	}
+	replayer, err := NewDeadLetterReplayer(brokers)
+	if err != nil {
+		t.Fatalf("NewDeadLetterReplayer() error = %v", err)
+	}
+	t.Cleanup(func() { _ = replayer.Close() })
+	replayCandidate, err := replayer.ReadDeadLetter(
+		ctx, dlqTopic, deadLetter.Partition, deadLetter.Offset,
+	)
+	if err != nil {
+		t.Fatalf("ReadDeadLetter() error = %v", err)
+	}
+	if replayCandidate.OriginalTopic != topic || replayCandidate.Target() == "" {
+		t.Fatalf("replay candidate = %+v", replayCandidate)
+	}
 
 	stopConsumer()
 	select {
