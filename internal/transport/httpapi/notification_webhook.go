@@ -79,6 +79,11 @@ func (h *notificationWebhookHandler) receive(w http.ResponseWriter, r *http.Requ
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			h.record("too_large")
+			writeError(w, http.StatusRequestEntityTooLarge, errorCodeRequestBodyTooLarge, "request body is too large")
+			return
+		}
 		h.record("invalid_payload")
 		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
 		return

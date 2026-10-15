@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,7 @@ func TestCreateOrderRejectsInvalidHTTPInput(t *testing.T) {
 		{name: "client supplied customer ID", contentType: "application/json", body: `{"customer_id":"attacker","product_id":"product-1","quantity":1}`, wantStatus: http.StatusBadRequest},
 		{name: "unknown field", contentType: "application/json", body: `{"unknown":true}`, wantStatus: http.StatusBadRequest},
 		{name: "multiple JSON values", contentType: "application/json", body: `{} {}`, wantStatus: http.StatusBadRequest},
+		{name: "body exceeds limit", contentType: "application/json", body: `{"product_id":"` + strings.Repeat("x", 1<<20) + `","quantity":1}`, wantStatus: http.StatusRequestEntityTooLarge},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			useCases := &orderUseCasesStub{}

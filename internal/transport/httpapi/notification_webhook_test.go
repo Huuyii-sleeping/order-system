@@ -161,9 +161,11 @@ func TestNotificationWebhookRejectsOversizedBody(t *testing.T) {
 	secret, timestamp := "local-test-secret", strconv.FormatInt(time.Now().Unix(), 10)
 	body := strings.Repeat("x", (1<<20)+1)
 	useCases := &webhookUseCasesStub{}
+	metrics := &webhookMetricsStub{}
 	router := httpapi.NewRouterWithConfig(catalogQueriesStub{}, nil, nil, httpapi.RouterConfig{
 		NotificationWebhooks:        useCases,
 		NotificationWebhookSecurity: httpapi.NotificationWebhookSecurity{Secret: secret, Tolerance: time.Minute},
+		NotificationWebhookMetrics:  metrics,
 	})
 	request := httptest.NewRequest(http.MethodPost, "/webhooks/notifications/provider", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -171,8 +173,11 @@ func TestNotificationWebhookRejectsOversizedBody(t *testing.T) {
 	request.Header.Set(httpapi.WebhookSignatureHeader, signWebhook(secret, timestamp, body))
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || useCases.event.ID != "" {
+	if response.Code != http.StatusRequestEntityTooLarge || useCases.event.ID != "" {
 		t.Fatalf("response = %d, use case event = %+v", response.Code, useCases.event)
+	}
+	if len(metrics.outcomes) != 1 || metrics.outcomes[0] != "too_large" {
+		t.Fatalf("metrics outcomes = %v, want [too_large]", metrics.outcomes)
 	}
 }
 

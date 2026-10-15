@@ -89,17 +89,17 @@ func TestHTTPAPIDocumentOperationsAndSecurity(t *testing.T) {
 		"getReadiness":               {"200", "503"},
 		"listProducts":               {"200", "500"},
 		"getProduct":                 {"200", "404", "500"},
-		"registerUser":               {"201", "400", "409", "415", "500"},
-		"login":                      {"200", "400", "401", "415", "429", "500", "503"},
+		"registerUser":               {"201", "400", "409", "413", "415", "500"},
+		"login":                      {"200", "400", "401", "413", "415", "429", "500", "503"},
 		"refreshAccessToken":         {"200", "401", "403", "429", "500", "503"},
 		"logout":                     {"204", "401", "500"},
 		"logoutAll":                  {"204", "401", "500"},
 		"listOrders":                 {"200", "400", "401", "500"},
-		"createOrder":                {"200", "201", "400", "401", "404", "409", "415", "500"},
+		"createOrder":                {"200", "201", "400", "401", "404", "409", "413", "415", "500"},
 		"getOrder":                   {"200", "401", "404", "500"},
 		"getOrderPayment":            {"200", "401", "404", "500"},
 		"getOrderNotification":       {"200", "401", "404", "500"},
-		"receiveNotificationWebhook": {"200", "400", "401", "404", "409", "415", "500"},
+		"receiveNotificationWebhook": {"200", "400", "401", "404", "409", "413", "415", "500"},
 	}
 	seenOperationIDs := make(map[string]string)
 	for path, pathItem := range document.Paths {

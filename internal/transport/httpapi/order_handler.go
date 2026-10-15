@@ -1,10 +1,7 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"strconv"
@@ -19,7 +16,6 @@ import (
 
 const (
 	IdempotencyKeyHeader = "Idempotency-Key"
-	maxJSONBodyBytes     = 1 << 20
 )
 
 type orderHandler struct {
@@ -65,7 +61,7 @@ func (h *orderHandler) create(w http.ResponseWriter, r *http.Request) {
 
 	var request createOrderRequest
 	if err := decodeJSONBody(w, r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
+		writeJSONBodyError(w, err)
 		return
 	}
 
@@ -205,21 +201,4 @@ func orderToResponse(created order.Order) orderResponse {
 func hasJSONContentType(value string) bool {
 	mediaType, _, err := mime.ParseMediaType(value)
 	return err == nil && strings.EqualFold(mediaType, "application/json")
-}
-
-func decodeJSONBody(w http.ResponseWriter, r *http.Request, destination any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(destination); err != nil {
-		return fmt.Errorf("decode JSON: %w", err)
-	}
-
-	// 一个请求体只允许包含一个 JSON 值，避免后面拼接的内容被忽略。
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("request body must contain one JSON object")
-	}
-
-	return nil
 }

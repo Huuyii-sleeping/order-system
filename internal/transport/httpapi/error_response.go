@@ -6,6 +6,7 @@ const (
 	errorCodeInternalError           = "internal_error"
 	errorCodeContentTypeRequired     = "content_type_required"
 	errorCodeInvalidRequestBody      = "invalid_request_body"
+	errorCodeRequestBodyTooLarge     = "request_body_too_large"
 	errorCodeInvalidBearerToken      = "invalid_bearer_token"
 	errorCodeServiceUnavailable      = "service_unavailable"
 	errorCodeRateLimited             = "rate_limited"

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,26 @@ func TestRegisterUser(t *testing.T) {
 	}
 	if bytes.Contains(response.Body.Bytes(), []byte("password")) {
 		t.Errorf("response exposes password data: %s", response.Body.String())
+	}
+}
+
+func TestRegisterRejectsOversizedBodyBeforeUseCase(t *testing.T) {
+	auth := &authUseCasesStub{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/auth/register",
+		strings.NewReader(`{"email":"`+strings.Repeat("x", 1<<20)+`@example.com","password":"correct-horse"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status code = %d, want %d; body = %s", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
+	}
+	if auth.registerCommand != (authapp.RegisterCommand{}) {
+		t.Fatal("oversized request must not call Register()")
 	}
 }
 

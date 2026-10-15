@@ -516,6 +516,17 @@ curl http://127.0.0.1:8080/openapi.json
 真实 Router 探测，防止说明书声明不存在的路由。维护步骤和失败排查见
 [`docs/runbooks/http-api-contracts.md`](docs/runbooks/http-api-contracts.md)。
 
+## HTTP 输入边界与资源保护
+
+所有 JSON 业务请求和通知 Webhook 的 body 上限为 1 MiB。超过上限时服务返回 `413` 和稳定错误码
+`request_body_too_large`，不会进入应用 UseCase；JSON 语法错误、未知字段和多段 JSON 仍返回
+`400 invalid_request_body`。API Server 同时把 Request line 和 Header 总大小限制为 1 MiB，
+超限请求会在 Router 前由标准库拒绝，通常表现为 `431`。
+
+这些限制不能替代字段校验、认证、限流和超时：它们分别保护 body 解码、HTTP 解析、身份和下游
+资源。需要上传大文件或批量数据时，应设计独立的流式或异步导入接口，而不是提高 JSON 全局上限。
+边界验证和排查方法见 [`docs/runbooks/http-input-bounds.md`](docs/runbooks/http-input-bounds.md)。
+
 ## Kubernetes 部署基线
 
 Kustomize 清单位于 `deployments/kubernetes/base`，包含 API Deployment、ClusterIP Service、

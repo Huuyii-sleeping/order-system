@@ -249,8 +249,9 @@ func run(logger *slog.Logger, cfg config.Config) error {
 	)
 
 	server := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: handler,
+		Addr:           cfg.HTTPAddr,
+		Handler:        handler,
+		MaxHeaderBytes: httpapi.DefaultMaxHeaderBytes,
 
 		// 限制发送完整请求头的时间
 		ReadHeaderTimeout: 5 * time.Second,

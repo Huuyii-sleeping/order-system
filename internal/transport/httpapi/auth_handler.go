@@ -220,7 +220,7 @@ func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentialsReque
 
 	var request credentialsRequest
 	if err := decodeJSONBody(w, r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequestBody, "invalid request body")
+		writeJSONBodyError(w, err)
 		return credentialsRequest{}, false
 	}
 	return request, true

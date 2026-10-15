@@ -31,3 +31,4 @@
 - [`0031-structured-logging-and-correlation.md`](0031-structured-logging-and-correlation.md)：统一 JSON 日志、Context 关联字段、日志级别和敏感信息边界。
 - [`0032-service-level-objectives-and-error-budgets.md`](0032-service-level-objectives-and-error-budgets.md)：用用户视角 SLI、28 天 SLO、错误预算和多窗口燃烧率定义 HTTP 可靠性。
 - [`0033-secure-runtime-diagnostics.md`](0033-secure-runtime-diagnostics.md)：通过默认关闭、独立回环端口和受监管生命周期安全提供 Go pprof 运行时诊断。
+- [`0034-http-input-resource-bounds.md`](0034-http-input-resource-bounds.md)：通过 JSON body、HTTP Header 上限和明确 413 契约保护 HTTP 输入资源。
