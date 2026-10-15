@@ -176,6 +176,10 @@ Redpanda 对外只监听 `127.0.0.1:19092`。它实现 Kafka 协议，用于本�
 版本迁移和破坏性变更规则见
 [`docs/runbooks/api-version-migration.md`](docs/runbooks/api-version-migration.md)。
 
+发布候选可运行 `make production-readiness-check`，一次验证代码、契约、镜像、真实中间件、故障摘流、
+备份恢复、性能基线和回滚冒烟。该结果不替代生产 TLS、容量、Provider、灾备、值班和合规签字；
+完整边界见 [`docs/runbooks/production-readiness.md`](docs/runbooks/production-readiness.md)。
+
 ## API 示例
 
 先注册用户：

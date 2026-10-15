@@ -37,7 +37,7 @@ compose --profile application up -d --build --wait --wait-timeout 180 api
 
 echo "measuring cached catalog detail reads"
 go run ./tests/load \
-	-url "${api_url}/products/product-1" \
+	-url "${api_url}/api/v1/products/product-1" \
 	-duration "${PERFORMANCE_DURATION:-10s}" \
 	-concurrency "${PERFORMANCE_CONCURRENCY:-20}" \
 	-timeout "${PERFORMANCE_TIMEOUT:-2s}" \

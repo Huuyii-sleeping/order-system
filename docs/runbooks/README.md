@@ -26,3 +26,4 @@
 - [`message-recovery.md`](message-recovery.md)：精确检查和恢复 Outbox、Inbox、DLQ，避免人工操作制造重复业务效果。
 - [`access-control-and-audit.md`](access-control-and-audit.md)：引导管理角色、调用受保护接口并排查持久化审计事件。
 - [`api-version-migration.md`](api-version-migration.md)：迁移到 `/api/v1`、观测旧入口并按生命周期安全下线。
+- [`production-readiness.md`](production-readiness.md)：执行最终自动化验收矩阵，并区分代码级证据与真实生产签字。

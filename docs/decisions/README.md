@@ -37,3 +37,4 @@
 - [`0037-controlled-message-recovery.md`](0037-controlled-message-recovery.md)：用状态校验、租约保护、稳定消息身份和恢复记录控制 Outbox/Inbox/DLQ 人工修复。
 - [`0038-rbac-and-audit-events.md`](0038-rbac-and-audit-events.md)：分离认证与授权，用角色/权限策略和 fail-closed 持久化审计保护管理操作。
 - [`0039-api-version-lifecycle.md`](0039-api-version-lifecycle.md)：用 `/api/v1`、兼容入口、标准弃用 Header 和迁移指标安全演进 HTTP 契约。
+- [`0040-production-readiness-evidence.md`](0040-production-readiness-evidence.md)：把代码、制品、依赖、恢复、性能和发布门禁汇总为可重复证据，并保留真实环境签字边界。

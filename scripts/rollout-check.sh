@@ -47,7 +47,7 @@ wait_for_ready() {
 
 assert_products() {
 	url=$1
-	curl --silent --fail --max-time 2 "$url/products/product-1" | \
+	curl --silent --fail --max-time 2 "$url/api/v1/products/product-1" | \
 		grep -q 'Mechanical Keyboard'
 }
 

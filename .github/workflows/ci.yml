@@ -32,6 +32,9 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Verify module checksums
+        run: go mod verify
+
       - name: Run race detector
         run: go test -race ./...
 
@@ -84,6 +87,12 @@ jobs:
 
       - name: Build application image
         run: docker build --pull --tag order-system:ci .
+
+      - name: Verify non-root release image
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' order-system:ci)" = "app"
+          docker run --rm --entrypoint /bin/sh order-system:ci -c \
+            'test "$(id -u)" -ne 0 && test -x /app/api && test -x /app/migrate'
 
   integration:
     name: Real infrastructure integration
@@ -156,3 +165,11 @@ jobs:
 
       - name: Verify local rollout and rollback sequence
         run: make rollout-check
+
+  release-readiness:
+    name: Release readiness matrix
+    needs: [database-recovery, performance, rollout]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm all automated release gates passed
+        run: echo "release readiness automated matrix passed"
