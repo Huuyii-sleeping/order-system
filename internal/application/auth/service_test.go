@@ -8,6 +8,7 @@ import (
 
 	"example.com/order-system/internal/adapters/memory"
 	authapp "example.com/order-system/internal/application/auth"
+	"example.com/order-system/internal/application/authorization"
 	"example.com/order-system/internal/domain/identity"
 )
 
@@ -140,6 +141,13 @@ func TestLoginCreatesHashedExpiringSessionAndAuthenticatesToken(t *testing.T) {
 	userID, err := service.Authenticate(context.Background(), result.AccessToken)
 	if err != nil || userID != result.User.ID() {
 		t.Fatalf("Authenticate() = %q, %v", userID, err)
+	}
+	if err := store.SetUserRole(result.User.ID(), authorization.RoleOperator); err != nil {
+		t.Fatalf("SetUserRole() error = %v", err)
+	}
+	principal, err := service.AuthenticatePrincipal(context.Background(), result.AccessToken)
+	if err != nil || principal.UserID != result.User.ID() || principal.Role != authorization.RoleOperator {
+		t.Fatalf("AuthenticatePrincipal() = %+v, %v", principal, err)
 	}
 	if _, err := service.Authenticate(context.Background(), "another-token"); !errors.Is(err, authapp.ErrInvalidSession) {
 		t.Fatalf("Authenticate(unknown) error = %v", err)

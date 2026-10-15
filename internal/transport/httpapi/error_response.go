@@ -8,6 +8,7 @@ const (
 	errorCodeInvalidRequestBody      = "invalid_request_body"
 	errorCodeRequestBodyTooLarge     = "request_body_too_large"
 	errorCodeInvalidBearerToken      = "invalid_bearer_token"
+	errorCodePermissionDenied        = "permission_denied"
 	errorCodeServiceUnavailable      = "service_unavailable"
 	errorCodeRateLimited             = "rate_limited"
 	errorCodeProductNotFound         = "product_not_found"
@@ -29,6 +30,7 @@ const (
 	errorCodeInvalidWebhook          = "invalid_webhook_event"
 	errorCodeInvalidWebhookSignature = "invalid_webhook_signature"
 	errorCodeWebhookConflict         = "webhook_event_conflict"
+	errorCodeInvalidAuditQuery       = "invalid_audit_query"
 )
 
 // errorResponse 同时保留旧的 error 文案和新的稳定 code。

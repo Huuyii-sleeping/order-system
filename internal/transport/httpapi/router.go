@@ -14,6 +14,7 @@ import (
 
 	"example.com/order-system/api/openapi"
 	authapp "example.com/order-system/internal/application/auth"
+	"example.com/order-system/internal/application/authorization"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/domain/catalog"
 	"example.com/order-system/internal/domain/identity"
@@ -59,6 +60,10 @@ type SessionAuthenticator interface {
 	Authenticate(context.Context, string) (string, error)
 }
 
+type AdministrativeAuth interface {
+	PrincipalAuthenticator
+}
+
 type AuthSecurityConfig struct {
 	SecureCookies  bool
 	LoginLimiter   RequestRateLimiter
@@ -80,6 +85,11 @@ type RouterConfig struct {
 	NotificationWebhookSecurity NotificationWebhookSecurity
 	NotificationWebhookMetrics  NotificationWebhookMetrics
 	Logger                      *slog.Logger
+	Authorization               PermissionAuthorizer
+	Audit                       interface {
+		AuditRecorder
+		AuditQueries
+	}
 }
 
 // NewRouter 创建 API 使用的 HTTP 路由。
@@ -170,6 +180,16 @@ func NewRouterWithConfig(
 			config.NotificationWebhooks, config.NotificationWebhookSecurity, config.NotificationWebhookMetrics,
 		)
 		mux.HandleFunc("POST /webhooks/notifications/provider", webhookHandler.receive)
+	}
+	if administrativeAuth, ok := authUseCases.(AdministrativeAuth); ok &&
+		config.Authorization != nil && config.Audit != nil {
+		handler := auditHandler{queries: config.Audit}
+		mux.Handle("GET /admin/audit-events", WithPermission(
+			administrativeAuth, config.Authorization, config.Audit,
+			authorization.PermissionAuditRead,
+			"audit.events.list", "audit_log", "audit_events",
+			http.HandlerFunc(handler.list),
+		))
 	}
 
 	// 返回原始路由器。

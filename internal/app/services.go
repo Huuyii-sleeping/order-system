@@ -18,7 +18,9 @@ import (
 	"example.com/order-system/internal/adapters/postgres"
 	redisadapter "example.com/order-system/internal/adapters/redis"
 	"example.com/order-system/internal/adapters/sessiontoken"
+	"example.com/order-system/internal/application/audit"
 	authapp "example.com/order-system/internal/application/auth"
+	"example.com/order-system/internal/application/authorization"
 	catalogapp "example.com/order-system/internal/application/catalog"
 	notificationapp "example.com/order-system/internal/application/notification"
 	orderapp "example.com/order-system/internal/application/order"
@@ -47,6 +49,8 @@ type Services struct {
 	NotificationProvider notificationapp.Provider
 	LoginLimiter         ratelimit.Limiter
 	RefreshLimiter       ratelimit.Limiter
+	Authorization        authorization.Policy
+	Audit                *audit.Service
 
 	readiness []dependencyPinger
 	closers   []io.Closer
@@ -90,6 +94,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 	}
 	var readiness []dependencyPinger
 	var closers []io.Closer
+	var auditStore audit.Store
 
 	switch cfg.StorageDriver {
 	case config.StorageMemory:
@@ -104,6 +109,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 
 		products = memory.NewCatalogRepository(seededProducts)
 		identities = memory.NewIdentityStore()
+		auditStore = memory.NewAuditStore()
 		memoryOrders, err := memory.NewOrderStore(seededStocks)
 		if err != nil {
 			return nil, fmt.Errorf("create memory order store: %w", err)
@@ -132,6 +138,7 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		readiness = append(readiness, db)
 		products = postgres.NewCatalogRepository(db)
 		identities = postgres.NewIdentityStore(db)
+		auditStore = postgres.NewAuditStore(db)
 		orders = postgres.NewOrderStore(db)
 		outboxStores = []outboxapp.Store{postgres.NewOutboxStore(db)}
 		paymentStore = postgres.NewPaymentStore(db)
@@ -220,8 +227,12 @@ func NewServices(ctx context.Context, cfg config.Config, metrics serviceMetrics)
 		NotificationProvider: notificationProvider,
 		LoginLimiter:         loginLimiter,
 		RefreshLimiter:       refreshLimiter,
-		readiness:            readiness,
-		closers:              closers,
+		Authorization:        authorization.Policy{},
+		Audit: audit.NewService(
+			auditStore, idgenerator.Random{}, clock.System{},
+		),
+		readiness: readiness,
+		closers:   closers,
 	}, nil
 }
 

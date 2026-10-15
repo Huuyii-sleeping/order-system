@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"example.com/order-system/internal/application/authorization"
 	"example.com/order-system/internal/application/messageops"
 )
 
@@ -14,12 +15,14 @@ type storeStub struct {
 	finishedWith string
 	lastError    string
 	beginErr     error
+	retryCalls   int
 }
 
 func (s *storeStub) GetOutbox(context.Context, string) (messageops.OutboxRecord, error) {
 	return messageops.OutboxRecord{}, nil
 }
 func (s *storeStub) RetryOutbox(_ context.Context, command messageops.RetryOutboxCommand) (messageops.RecoveryAction, error) {
+	s.retryCalls++
 	return messageops.RecoveryAction{ID: command.ActionID, Type: messageops.ActionOutboxRetry}, nil
 }
 func (s *storeStub) GetInbox(context.Context, string) (messageops.InboxRecord, error) {
@@ -54,6 +57,25 @@ func (b *brokerStub) ReplayDeadLetter(context.Context, messageops.DeadLetterMess
 type idStub struct{ value string }
 
 func (s idStub) NewID() (string, error) { return s.value, nil }
+
+type actorAuthorizerStub struct{ err error }
+
+func (s actorAuthorizerStub) Authorize(context.Context, string, authorization.Permission) error {
+	return s.err
+}
+
+func TestRetryOutboxRequiresAuthorizedActorBeforeStoreMutation(t *testing.T) {
+	store := &storeStub{}
+	service := messageops.NewService(store, nil, idStub{"action-1"}, nil).
+		WithActorAuthorization(actorAuthorizerStub{authorization.ErrPermissionDenied})
+	_, err := service.RetryOutbox(context.Background(), "message-1", 2, "customer-1", "manual retry")
+	if !errors.Is(err, authorization.ErrPermissionDenied) {
+		t.Fatalf("RetryOutbox() error = %v", err)
+	}
+	if store.retryCalls != 0 {
+		t.Fatalf("unauthorized retry reached store %d times", store.retryCalls)
+	}
+}
 
 func TestReplayDeadLetterRequiresAllowedOriginalTopic(t *testing.T) {
 	store := &storeStub{}

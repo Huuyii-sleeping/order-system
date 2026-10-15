@@ -2,9 +2,11 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
+	"example.com/order-system/internal/application/authorization"
 	"example.com/order-system/internal/domain/identity"
 )
 
@@ -13,6 +15,7 @@ type IdentityStore struct {
 	mu sync.RWMutex
 
 	usersByEmail        map[string]identity.User
+	rolesByUserID       map[string]authorization.Role
 	sessionsByTokenHash map[string]identity.Session
 	refreshByTokenHash  map[string]identity.RefreshToken
 }
@@ -20,6 +23,7 @@ type IdentityStore struct {
 func NewIdentityStore() *IdentityStore {
 	return &IdentityStore{
 		usersByEmail:        make(map[string]identity.User),
+		rolesByUserID:       make(map[string]authorization.Role),
 		sessionsByTokenHash: make(map[string]identity.Session),
 		refreshByTokenHash:  make(map[string]identity.RefreshToken),
 	}
@@ -37,6 +41,37 @@ func (s *IdentityStore) CreateUser(ctx context.Context, user identity.User) erro
 	}
 
 	s.usersByEmail[user.Email()] = user
+	s.rolesByUserID[user.ID()] = authorization.RoleCustomer
+	return nil
+}
+
+func (s *IdentityStore) GetUserRole(
+	ctx context.Context, userID string,
+) (authorization.Role, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	role, exists := s.rolesByUserID[userID]
+	if !exists {
+		return "", identity.ErrUserNotFound
+	}
+	return role, nil
+}
+
+// SetUserRole supports local learning and tests. Production role changes must
+// use an audited administration workflow instead of trusting registration input.
+func (s *IdentityStore) SetUserRole(userID string, role authorization.Role) error {
+	if _, ok := authorization.ParseRole(string(role)); !ok {
+		return errors.New("invalid role")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.rolesByUserID[userID]; !exists {
+		return identity.ErrUserNotFound
+	}
+	s.rolesByUserID[userID] = role
 	return nil
 }
 

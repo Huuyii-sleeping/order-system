@@ -24,3 +24,4 @@
 - [`go-fuzz-tests.md`](go-fuzz-tests.md)：运行 Go Fuzz Test、保存最小回归样本并解释 fuzz 通过的边界。
 - [`database-query-plans.md`](database-query-plans.md)：运行 PostgreSQL 查询计划回归、阅读索引/顺序扫描，并排查 N+1。
 - [`message-recovery.md`](message-recovery.md)：精确检查和恢复 Outbox、Inbox、DLQ，避免人工操作制造重复业务效果。
+- [`access-control-and-audit.md`](access-control-and-audit.md)：引导管理角色、调用受保护接口并排查持久化审计事件。

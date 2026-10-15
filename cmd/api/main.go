@@ -216,6 +216,8 @@ func run(logger *slog.Logger, cfg config.Config) error {
 			},
 			NotificationWebhookMetrics: metricRegistry,
 			Logger:                     logger,
+			Authorization:              services.Authorization,
+			Audit:                      services.Audit,
 			AuthSecurity: httpapi.AuthSecurityConfig{
 				SecureCookies:  cfg.SecureCookies,
 				LoginLimiter:   services.LoginLimiter,

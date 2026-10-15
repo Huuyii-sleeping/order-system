@@ -15,6 +15,7 @@ import (
 	"example.com/order-system/internal/adapters/idgenerator"
 	"example.com/order-system/internal/adapters/messaging"
 	"example.com/order-system/internal/adapters/postgres"
+	"example.com/order-system/internal/application/authorization"
 	"example.com/order-system/internal/application/messageops"
 )
 
@@ -41,6 +42,7 @@ func run(arguments []string) error {
 	}
 	defer db.Close()
 	store := postgres.NewMessageOperationsStore(db)
+	authorizer := authorization.NewService(postgres.NewIdentityStore(db), authorization.Policy{})
 
 	switch arguments[0] {
 	case "outbox-inspect":
@@ -72,7 +74,7 @@ func run(arguments []string) error {
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
-		service := messageops.NewService(store, nil, idgenerator.Random{}, nil)
+		service := messageops.NewService(store, nil, idgenerator.Random{}, nil).WithActorAuthorization(authorizer)
 		action, err := service.RetryOutbox(ctx, *messageID, *expectedAttempts, *actor, *reason)
 		return printResult(action, err)
 
@@ -97,7 +99,7 @@ func run(arguments []string) error {
 			return err
 		}
 		defer replayer.Close()
-		service := messageops.NewService(store, replayer, idgenerator.Random{}, []string{*allowedTopic})
+		service := messageops.NewService(store, replayer, idgenerator.Random{}, []string{*allowedTopic}).WithActorAuthorization(authorizer)
 		action, err := service.ReplayDeadLetter(
 			ctx, *topic, int32(*partition), parsedOffset, *actor, *reason,
 		)

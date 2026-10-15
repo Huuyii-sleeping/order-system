@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"example.com/order-system/internal/application/authorization"
 	"example.com/order-system/internal/domain/identity"
 )
 
@@ -64,6 +65,24 @@ func (s *IdentityStore) GetUserByEmail(ctx context.Context, email string) (ident
 		return identity.User{}, fmt.Errorf("restore user: %w", err)
 	}
 	return user, nil
+}
+
+func (s *IdentityStore) GetUserRole(
+	ctx context.Context, userID string,
+) (authorization.Role, error) {
+	var rawRole string
+	err := s.db.QueryRowContext(ctx, `SELECT role FROM users WHERE id = $1`, userID).Scan(&rawRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", identity.ErrUserNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("select user role: %w", err)
+	}
+	role, ok := authorization.ParseRole(rawRole)
+	if !ok {
+		return "", fmt.Errorf("restore user role %q", rawRole)
+	}
+	return role, nil
 }
 
 func (s *IdentityStore) CreateSession(ctx context.Context, session identity.Session) error {

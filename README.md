@@ -165,6 +165,12 @@ Redpanda 对外只监听 `127.0.0.1:19092`。它实现 Kafka 协议，用于本�
 并发状态校验，并记录到 `message_recovery_actions`。完整流程见
 [`docs/runbooks/message-recovery.md`](docs/runbooks/message-recovery.md)。
 
+管理能力使用 `customer`、`operator`、`admin` 三种角色与细粒度 Permission 分离认证和授权。
+普通注册只能创建 `customer`；角色引导使用 `cmd/accessops role-set`，角色变更和审计事件在
+一个数据库事务内提交。`GET /admin/audit-events` 需要 `audit:read`，允许和拒绝的决定都会写入
+持久化审计表，审计不可用时敏感操作 fail closed。操作方式见
+[`docs/runbooks/access-control-and-audit.md`](docs/runbooks/access-control-and-audit.md)。
+
 ## API 示例
 
 先注册用户：

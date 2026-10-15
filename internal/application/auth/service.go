@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"example.com/order-system/internal/application/authorization"
 	"example.com/order-system/internal/domain/identity"
 )
 
@@ -27,6 +28,7 @@ var (
 type Store interface {
 	CreateUser(context.Context, identity.User) error
 	GetUserByEmail(context.Context, string) (identity.User, error)
+	GetUserRole(context.Context, string) (authorization.Role, error)
 	CreateSession(context.Context, identity.Session) error
 	GetSessionByTokenHash(context.Context, string, time.Time) (identity.Session, error)
 	CreateRefreshToken(context.Context, identity.RefreshToken) error
@@ -263,20 +265,36 @@ func (s *Service) Refresh(ctx context.Context, token string) (RefreshResult, err
 }
 
 func (s *Service) Authenticate(ctx context.Context, token string) (string, error) {
+	principal, err := s.AuthenticatePrincipal(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	return principal.UserID, nil
+}
+
+func (s *Service) AuthenticatePrincipal(
+	ctx context.Context, token string,
+) (authorization.Principal, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return "", ErrInvalidSession
+		return authorization.Principal{}, ErrInvalidSession
 	}
 
 	session, err := s.store.GetSessionByTokenHash(ctx, hashToken(token), s.clock.Now())
 	if errors.Is(err, identity.ErrSessionNotFound) {
-		return "", ErrInvalidSession
+		return authorization.Principal{}, ErrInvalidSession
 	}
 	if err != nil {
-		return "", fmt.Errorf("get session: %w", err)
+		return authorization.Principal{}, fmt.Errorf("get session: %w", err)
 	}
-
-	return session.UserID(), nil
+	role, err := s.store.GetUserRole(ctx, session.UserID())
+	if errors.Is(err, identity.ErrUserNotFound) {
+		return authorization.Principal{}, ErrInvalidSession
+	}
+	if err != nil {
+		return authorization.Principal{}, fmt.Errorf("get user role: %w", err)
+	}
+	return authorization.Principal{UserID: session.UserID(), Role: role}, nil
 }
 
 // Logout 撤销当前 Token。删除不存在的记录也视为成功，

@@ -26,7 +26,8 @@ DATABASE_URL='<database-url>' go run ./cmd/messageops outbox-retry \
 ```
 
 `expected-attempts` 防止检查后 Worker 已经推进状态，而人工命令仍覆盖新结果。命令只把
-`next_attempt_at` 调整为当前时间，真正发布仍由正常 Outbox Worker 完成。
+`next_attempt_at` 调整为当前时间，真正发布仍由正常 Outbox Worker 完成。`actor` 必须是
+数据库中仍具有 `message-recovery:execute` 权限的 `operator` 或 `admin`，不能只是任意备注。
 
 ## 检查 Inbox
 

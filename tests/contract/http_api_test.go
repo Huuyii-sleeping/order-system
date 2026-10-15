@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"example.com/order-system/api/openapi"
+	"example.com/order-system/internal/application/audit"
 	authapp "example.com/order-system/internal/application/auth"
+	"example.com/order-system/internal/application/authorization"
 	notificationapp "example.com/order-system/internal/application/notification"
 	orderapp "example.com/order-system/internal/application/order"
 	"example.com/order-system/internal/domain/catalog"
@@ -69,6 +71,7 @@ func TestHTTPAPIDocumentOperationsAndSecurity(t *testing.T) {
 		"/orders/{orderID}/payment":        {http.MethodGet},
 		"/orders/{orderID}/notification":   {http.MethodGet},
 		"/webhooks/notifications/provider": {http.MethodPost},
+		"/admin/audit-events":              {http.MethodGet},
 	}
 	if got := documentedMethods(document); !reflect.DeepEqual(got, want) {
 		t.Fatalf("documented HTTP operations changed:\n got %#v\nwant %#v", got, want)
@@ -100,6 +103,7 @@ func TestHTTPAPIDocumentOperationsAndSecurity(t *testing.T) {
 		"getOrderPayment":            {"200", "401", "404", "500"},
 		"getOrderNotification":       {"200", "401", "404", "500"},
 		"receiveNotificationWebhook": {"200", "400", "401", "404", "409", "413", "415", "500"},
+		"listAuditEvents":            {"200", "400", "401", "403", "500"},
 	}
 	seenOperationIDs := make(map[string]string)
 	for path, pathItem := range document.Paths {
@@ -153,6 +157,8 @@ func TestHTTPAPIPublicJSONSchemas(t *testing.T) {
 	assertSchemaFields(t, schemas, "OrderList", "items", "next_cursor")
 	assertSchemaFields(t, schemas, "Payment", "amount_cents", "created_at", "id", "order_id", "status", "updated_at")
 	assertSchemaFields(t, schemas, "Notification", "created_at", "event_type", "id", "order_id", "status", "updated_at")
+	assertSchemaFields(t, schemas, "AuditEvent", "action", "actor_id", "id", "metadata", "occurred_at", "outcome", "request_id", "resource_id", "resource_type")
+	assertSchemaFields(t, schemas, "AuditEventList", "items")
 
 	for schemaName, forbidden := range map[string][]string{
 		"LoginResponse": {"refresh_token", "password"},
@@ -331,6 +337,8 @@ func contractRouter() http.Handler {
 			NotificationWebhookSecurity: httpapi.NotificationWebhookSecurity{
 				Secret: "contract-test-secret",
 			},
+			Authorization: authorization.Policy{},
+			Audit:         httpContractAuditStub{},
 		},
 	)
 }
@@ -357,6 +365,9 @@ func (httpContractAuthStub) Refresh(context.Context, string) (authapp.RefreshRes
 }
 func (httpContractAuthStub) Authenticate(context.Context, string) (string, error) {
 	return "", authapp.ErrInvalidSession
+}
+func (httpContractAuthStub) AuthenticatePrincipal(context.Context, string) (authorization.Principal, error) {
+	return authorization.Principal{}, authapp.ErrInvalidSession
 }
 func (httpContractAuthStub) Logout(context.Context, string) error    { return nil }
 func (httpContractAuthStub) LogoutAll(context.Context, string) error { return nil }
@@ -389,4 +400,11 @@ type httpContractWebhookStub struct{}
 
 func (httpContractWebhookStub) Process(context.Context, notificationapp.WebhookEvent) (notificationapp.WebhookResult, error) {
 	return notificationapp.WebhookResult{}, errors.New("contract route probe")
+}
+
+type httpContractAuditStub struct{}
+
+func (httpContractAuditStub) Record(context.Context, audit.RecordCommand) error { return nil }
+func (httpContractAuditStub) List(context.Context, int) ([]audit.Event, error) {
+	return nil, errors.New("contract route probe")
 }

@@ -35,3 +35,4 @@
 - [`0035-go-fuzz-and-property-tests.md`](0035-go-fuzz-and-property-tests.md)：用 Go 原生 Fuzz Test 探索 JSON、分页和 Webhook 输入边界，并固定安全不变量。
 - [`0036-database-query-plans-and-n-plus-one.md`](0036-database-query-plans-and-n-plus-one.md)：用真实 PostgreSQL 执行计划回归保护订单列表索引，并建立 N+1 排查边界。
 - [`0037-controlled-message-recovery.md`](0037-controlled-message-recovery.md)：用状态校验、租约保护、稳定消息身份和恢复记录控制 Outbox/Inbox/DLQ 人工修复。
+- [`0038-rbac-and-audit-events.md`](0038-rbac-and-audit-events.md)：分离认证与授权，用角色/权限策略和 fail-closed 持久化审计保护管理操作。

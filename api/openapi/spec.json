@@ -366,6 +366,31 @@
           "500": {"$ref": "#/components/responses/InternalError"}
         }
       }
+    },
+    "/admin/audit-events": {
+      "get": {
+        "operationId": "listAuditEvents",
+        "tags": ["administration"],
+        "summary": "List recent authorization audit events",
+        "description": "Requires the audit:read permission. Both allowed and denied authorization decisions are durably recorded.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}
+        }],
+        "responses": {
+          "200": {
+            "description": "Recent audit events",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditEventList"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "500": {"$ref": "#/components/responses/InternalError"}
+        }
+      }
     }
   },
   "components": {
@@ -411,7 +436,7 @@
         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
       },
       "Forbidden": {
-        "description": "CSRF validation failed",
+        "description": "CSRF validation failed or the authenticated principal lacks permission",
         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
       },
       "NotFound": {
@@ -598,6 +623,30 @@
         "properties": {
           "status": {"type": "string", "enum": ["sent", "failed"]},
           "processed": {"type": "boolean"}
+        }
+      },
+      "AuditEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "actor_id", "action", "resource_type", "resource_id", "outcome", "request_id", "metadata", "occurred_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "actor_id": {"type": "string", "minLength": 1},
+          "action": {"type": "string", "minLength": 1},
+          "resource_type": {"type": "string", "minLength": 1},
+          "resource_id": {"type": "string", "minLength": 1},
+          "outcome": {"type": "string", "enum": ["allowed", "denied"]},
+          "request_id": {"type": "string", "maxLength": 128},
+          "metadata": {"type": "object", "additionalProperties": true},
+          "occurred_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "AuditEventList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/AuditEvent"}}
         }
       }
     }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"example.com/order-system/internal/application/authorization"
 )
 
 var (
@@ -106,6 +108,16 @@ type Service struct {
 	ids           IDGenerator
 	now           func() time.Time
 	allowedTopics map[string]struct{}
+	authorizer    interface {
+		Authorize(context.Context, string, authorization.Permission) error
+	}
+}
+
+func (s *Service) WithActorAuthorization(authorizer interface {
+	Authorize(context.Context, string, authorization.Permission) error
+}) *Service {
+	s.authorizer = authorizer
+	return s
 }
 
 func NewService(store Store, broker DeadLetterBroker, ids IDGenerator, allowedTopics []string) *Service {
@@ -150,6 +162,11 @@ func (s *Service) RetryOutbox(
 	if command.MessageID == "" || command.ExpectedAttempts < 0 || command.Actor == "" || command.Reason == "" {
 		return RecoveryAction{}, errors.New("invalid outbox retry request")
 	}
+	if s.authorizer != nil {
+		if err := s.authorizer.Authorize(ctx, command.Actor, authorization.PermissionMessageRecovery); err != nil {
+			return RecoveryAction{}, err
+		}
+	}
 	return s.store.RetryOutbox(ctx, command)
 }
 
@@ -162,6 +179,11 @@ func (s *Service) ReplayDeadLetter(
 	deadLetterTopic, actor, reason = strings.TrimSpace(deadLetterTopic), strings.TrimSpace(actor), strings.TrimSpace(reason)
 	if deadLetterTopic == "" || partition < 0 || offset < 0 || actor == "" || reason == "" {
 		return RecoveryAction{}, errors.New("invalid dead-letter replay request")
+	}
+	if s.authorizer != nil {
+		if err := s.authorizer.Authorize(ctx, actor, authorization.PermissionMessageRecovery); err != nil {
+			return RecoveryAction{}, err
+		}
 	}
 	message, err := s.broker.ReadDeadLetter(ctx, deadLetterTopic, partition, offset)
 	if err != nil {
