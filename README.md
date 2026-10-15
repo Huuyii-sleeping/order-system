@@ -171,12 +171,17 @@ Redpanda 对外只监听 `127.0.0.1:19092`。它实现 Kafka 协议，用于本�
 持久化审计表，审计不可用时敏感操作 fail closed。操作方式见
 [`docs/runbooks/access-control-and-audit.md`](docs/runbooks/access-control-and-audit.md)。
 
+业务 API 的规范入口是 `/api/v1`。原有无版本路径在迁移期保持兼容，并返回 `Deprecation` 与
+`successor-version` Link；Prometheus 分开统计旧入口和版本化入口，不能在旧流量归零前直接删除。
+版本迁移和破坏性变更规则见
+[`docs/runbooks/api-version-migration.md`](docs/runbooks/api-version-migration.md)。
+
 ## API 示例
 
 先注册用户：
 
 ```bash
-curl -i http://127.0.0.1:8080/auth/register \
+curl -i http://127.0.0.1:8080/api/v1/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"learner@example.com","password":"learning-password"}'
 ```
@@ -185,7 +190,7 @@ curl -i http://127.0.0.1:8080/auth/register \
 `HttpOnly` Cookie；同时还会写入前端可读取的 `csrf_token` Cookie：
 
 ```bash
-curl -i http://127.0.0.1:8080/auth/login \
+curl -i http://127.0.0.1:8080/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"learner@example.com","password":"learning-password"}'
 ```
@@ -193,23 +198,23 @@ curl -i http://127.0.0.1:8080/auth/login \
 使用 Bearer Token 创建和查询自己的订单：
 
 ```bash
-curl -i http://127.0.0.1:8080/orders \
+curl -i http://127.0.0.1:8080/api/v1/orders \
   -H 'Authorization: Bearer <access-token>' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: learning-request-1' \
   -d '{"product_id":"product-1","quantity":2}'
 
-curl http://127.0.0.1:8080/orders/<order-id> \
+curl http://127.0.0.1:8080/api/v1/orders/<order-id> \
   -H 'Authorization: Bearer <access-token>'
 ```
 
 按创建时间倒序分页读取自己的订单历史：
 
 ```bash
-curl 'http://127.0.0.1:8080/orders?limit=20' \
+curl 'http://127.0.0.1:8080/api/v1/orders?limit=20' \
   -H 'Authorization: Bearer <access-token>'
 
-curl 'http://127.0.0.1:8080/orders?limit=20&cursor=<next-cursor>' \
+curl 'http://127.0.0.1:8080/api/v1/orders?limit=20&cursor=<next-cursor>' \
   -H 'Authorization: Bearer <access-token>'
 ```
 
@@ -225,14 +230,14 @@ N+1 排查顺序见 [`docs/runbooks/database-query-plans.md`](docs/runbooks/data
 查询当前用户订单对应的支付结果：
 
 ```bash
-curl http://127.0.0.1:8080/orders/<order-id>/payment \
+curl http://127.0.0.1:8080/api/v1/orders/<order-id>/payment \
   -H 'Authorization: Bearer <access-token>'
 ```
 
 支付终态还会异步创建通知任务。使用同一个 Bearer Token 查询通知状态：
 
 ```bash
-curl http://127.0.0.1:8080/orders/<order-id>/notification \
+curl http://127.0.0.1:8080/api/v1/orders/<order-id>/notification \
   -H 'Authorization: Bearer <access-token>'
 ```
 
@@ -262,17 +267,17 @@ Payment Worker 会以固定数量的 goroutine 处理批次；Provider 外层再
 登出当前设备，或让当前用户的所有设备立即下线：
 
 ```bash
-curl -i -X POST http://127.0.0.1:8080/auth/logout \
+curl -i -X POST http://127.0.0.1:8080/api/v1/auth/logout \
   -H 'Authorization: Bearer <access-token>'
 
-curl -i -X POST http://127.0.0.1:8080/auth/logout-all \
+curl -i -X POST http://127.0.0.1:8080/api/v1/auth/logout-all \
   -H 'Authorization: Bearer <access-token>'
 ```
 
 Access Token 过期后，浏览器携带登录时收到的 Cookie 调用刷新接口：
 
 ```bash
-curl -i -X POST http://127.0.0.1:8080/auth/refresh \
+curl -i -X POST http://127.0.0.1:8080/api/v1/auth/refresh \
   -H 'Cookie: refresh_token=<refresh-token>; csrf_token=<csrf-token>' \
   -H 'X-CSRF-Token: <csrf-token>'
 ```

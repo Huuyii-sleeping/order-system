@@ -31,7 +31,7 @@ DATABASE_URL='<database-url>' go run ./cmd/accessops role-set \
 使用具有 `audit:read` 权限的 Access Token：
 
 ```bash
-curl 'http://127.0.0.1:8080/admin/audit-events?limit=50' \
+curl 'http://127.0.0.1:8080/api/v1/admin/audit-events?limit=50' \
   -H 'Authorization: Bearer <operator-access-token>'
 ```
 

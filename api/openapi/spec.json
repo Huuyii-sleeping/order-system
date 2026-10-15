@@ -3,12 +3,16 @@
   "info": {
     "title": "Order System HTTP API",
     "version": "1.0.0",
-    "description": "Public HTTP contract for the learning order system. Error responses keep the legacy error message and add a stable machine-readable code."
+    "description": "Public HTTP contract for v1 of the learning order system. The canonical base path is /api/v1. The unversioned base remains temporarily compatible and returns Deprecation plus successor-version headers. Error responses keep the legacy error message and add a stable machine-readable code."
   },
   "servers": [
     {
+      "url": "http://127.0.0.1:8080/api/v1",
+      "description": "Canonical v1 local development base"
+    },
+    {
       "url": "http://127.0.0.1:8080",
-      "description": "Local development"
+      "description": "Deprecated unversioned compatibility base; migrate to /api/v1"
     }
   ],
   "tags": [
@@ -25,6 +29,7 @@
         "tags": ["operations"],
         "summary": "Read the OpenAPI contract",
         "security": [],
+        "servers": [{"url": "http://127.0.0.1:8080", "description": "Unversioned operations endpoint"}],
         "responses": {
           "200": {
             "description": "OpenAPI JSON document",
@@ -43,6 +48,7 @@
         "tags": ["operations"],
         "summary": "Check process liveness",
         "security": [],
+        "servers": [{"url": "http://127.0.0.1:8080", "description": "Unversioned operations endpoint"}],
         "responses": {
           "200": {
             "description": "Process is alive",
@@ -62,6 +68,7 @@
         "tags": ["operations"],
         "summary": "Check whether the instance can receive traffic",
         "security": [],
+        "servers": [{"url": "http://127.0.0.1:8080", "description": "Unversioned operations endpoint"}],
         "responses": {
           "200": {
             "description": "Instance is ready",

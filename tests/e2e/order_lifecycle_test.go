@@ -25,6 +25,7 @@ func TestOrderLifecycleAcrossRealInfrastructure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: 5 * time.Second}
+	apiURL := baseURL + "/api/v1"
 
 	assertEndpointStatus(t, ctx, client, baseURL+"/healthz", http.StatusOK)
 	assertEndpointStatus(t, ctx, client, baseURL+"/readyz", http.StatusOK)
@@ -33,7 +34,7 @@ func TestOrderLifecycleAcrossRealInfrastructure(t *testing.T) {
 	email := fmt.Sprintf("learner-%d@example.test", testID)
 	password := "integration-password"
 
-	status, _ := requestJSON(t, ctx, client, http.MethodPost, baseURL+"/auth/register", map[string]any{
+	status, _ := requestJSON(t, ctx, client, http.MethodPost, apiURL+"/auth/register", map[string]any{
 		"email": email, "password": password,
 	}, nil, nil)
 	if status != http.StatusCreated {
@@ -43,7 +44,7 @@ func TestOrderLifecycleAcrossRealInfrastructure(t *testing.T) {
 	var login struct {
 		AccessToken string `json:"access_token"`
 	}
-	status, _ = requestJSON(t, ctx, client, http.MethodPost, baseURL+"/auth/login", map[string]any{
+	status, _ = requestJSON(t, ctx, client, http.MethodPost, apiURL+"/auth/login", map[string]any{
 		"email": email, "password": password,
 	}, nil, &login)
 	if status != http.StatusOK || login.AccessToken == "" {
@@ -61,7 +62,7 @@ func TestOrderLifecycleAcrossRealInfrastructure(t *testing.T) {
 		Status string `json:"status"`
 	}
 	status, _ = requestJSON(
-		t, ctx, client, http.MethodPost, baseURL+"/orders", orderRequest, createHeaders, &created,
+		t, ctx, client, http.MethodPost, apiURL+"/orders", orderRequest, createHeaders, &created,
 	)
 	if status != http.StatusCreated || created.ID == "" || created.Status != "pending" {
 		t.Fatalf("create order = status %d, body %+v; want 201 pending order", status, created)
@@ -72,13 +73,13 @@ func TestOrderLifecycleAcrossRealInfrastructure(t *testing.T) {
 		ID string `json:"id"`
 	}
 	status, _ = requestJSON(
-		t, ctx, client, http.MethodPost, baseURL+"/orders", orderRequest, createHeaders, &retried,
+		t, ctx, client, http.MethodPost, apiURL+"/orders", orderRequest, createHeaders, &retried,
 	)
 	if status != http.StatusOK || retried.ID != created.ID {
 		t.Fatalf("idempotent retry = status %d, order %q; want 200 and %q", status, retried.ID, created.ID)
 	}
 
-	orderURL := baseURL + "/orders/" + created.ID
+	orderURL := apiURL + "/orders/" + created.ID
 	waitForResourceStatus(t, ctx, client, orderURL, authHeaders, "confirmed")
 	waitForResourceStatus(t, ctx, client, orderURL+"/payment", authHeaders, "succeeded")
 	waitForResourceStatus(t, ctx, client, orderURL+"/notification", authHeaders, "sent")
@@ -88,7 +89,7 @@ func TestOrderLifecycleAcrossRealInfrastructure(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"items"`
 	}
-	status, _ = requestJSON(t, ctx, client, http.MethodGet, baseURL+"/orders?limit=10", nil, authHeaders, &orders)
+	status, _ = requestJSON(t, ctx, client, http.MethodGet, apiURL+"/orders?limit=10", nil, authHeaders, &orders)
 	if status != http.StatusOK || !containsOrder(orders.Items, created.ID) {
 		t.Fatalf("list orders = status %d, items %+v; want created order %q", status, orders.Items, created.ID)
 	}

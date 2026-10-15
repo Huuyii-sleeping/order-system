@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	authapp "example.com/order-system/internal/application/auth"
@@ -38,9 +39,9 @@ type loginResponse struct {
 
 const refreshCookieName = "refresh_token"
 
-func setRefreshCookie(w http.ResponseWriter, token string, expiresAt time.Time, secure bool) {
+func setRefreshCookie(w http.ResponseWriter, token string, expiresAt time.Time, secure bool, path string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: refreshCookieName, Value: token, Path: "/auth",
+		Name: refreshCookieName, Value: token, Path: path,
 		Expires: expiresAt, HttpOnly: true, Secure: secure,
 		SameSite: http.SameSiteStrictMode,
 	})
@@ -56,14 +57,26 @@ func setCSRFCookie(w http.ResponseWriter, token string, expiresAt time.Time, sec
 }
 
 func clearAuthCookies(w http.ResponseWriter, secure bool) {
-	http.SetCookie(w, &http.Cookie{
-		Name: refreshCookieName, Value: "", Path: "/auth", MaxAge: -1,
-		HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
-	})
+	// During the v1 migration a browser may have received either cookie path.
+	// Expire both so moving between entrypoints cannot leave a usable refresh
+	// credential behind.
+	for _, path := range []string{"/auth", APIV1Prefix + "/auth"} {
+		http.SetCookie(w, &http.Cookie{
+			Name: refreshCookieName, Value: "", Path: path, MaxAge: -1,
+			HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
+		})
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name: csrfCookieName, Value: "", Path: "/", MaxAge: -1,
 		Secure: secure, SameSite: http.SameSiteStrictMode,
 	})
+}
+
+func refreshCookiePath(requestPath string) string {
+	if strings.HasPrefix(requestPath, APIV1Prefix+"/") {
+		return APIV1Prefix + "/auth"
+	}
+	return "/auth"
 }
 
 func (h *authHandler) register(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +132,7 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 	// Access Token 通过响应体返回；Refresh Token 只通过 HttpOnly Cookie 返回，
 	// 浏览器脚本无法直接读取长期凭证。
 	w.Header().Set("Cache-Control", "no-store")
-	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt, h.secureCookie)
+	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt, h.secureCookie, refreshCookiePath(r.URL.Path))
 	setCSRFCookie(w, csrfToken, result.RefreshExpiresAt, h.secureCookie)
 	_ = writeJSON(w, http.StatusOK, loginResponse{
 		AccessToken: result.AccessToken,
@@ -157,7 +170,7 @@ func (h *authHandler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt, h.secureCookie)
+	setRefreshCookie(w, result.RefreshToken, result.RefreshExpiresAt, h.secureCookie, refreshCookiePath(r.URL.Path))
 	setCSRFCookie(w, csrfToken, result.RefreshExpiresAt, h.secureCookie)
 	w.Header().Set("Cache-Control", "no-store")
 	response := struct {

@@ -16,6 +16,7 @@ type Registry struct {
 	httpRequests                *prometheus.CounterVec
 	httpDuration                *prometheus.HistogramVec
 	httpRequestsNow             prometheus.Gauge
+	httpAPIAccess               *prometheus.CounterVec
 	kafkaProcessingAttempts     *prometheus.CounterVec
 	kafkaRetries                *prometheus.CounterVec
 	kafkaDeadLetters            *prometheus.CounterVec
@@ -66,6 +67,14 @@ func NewRegistry() *Registry {
 			Name:      "requests_in_flight",
 			Help:      "Current number of HTTP requests being processed.",
 		}),
+		httpAPIAccess: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "order_system", Subsystem: "http_api",
+				Name: "access_total",
+				Help: "Total API requests by bounded version and entrypoint.",
+			},
+			[]string{"version", "entrypoint"},
+		),
 		kafkaProcessingAttempts: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "order_system", Subsystem: "kafka",
@@ -206,6 +215,7 @@ func NewRegistry() *Registry {
 		metrics.httpRequests,
 		metrics.httpDuration,
 		metrics.httpRequestsNow,
+		metrics.httpAPIAccess,
 		metrics.kafkaProcessingAttempts,
 		metrics.kafkaRetries,
 		metrics.kafkaDeadLetters,
@@ -325,6 +335,10 @@ func (r *Registry) DeleteConsumerLag(consumerGroup, topic string, partition int3
 
 func (r *Registry) RequestStarted() {
 	r.httpRequestsNow.Inc()
+}
+
+func (r *Registry) RecordAPIAccess(version, entrypoint string) {
+	r.httpAPIAccess.WithLabelValues(version, entrypoint).Inc()
 }
 
 func (r *Registry) RequestFinished(

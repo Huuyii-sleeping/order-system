@@ -28,6 +28,7 @@ import (
 
 type httpAPIDocument struct {
 	OpenAPI    string                  `json:"openapi"`
+	Servers    []httpServer            `json:"servers"`
 	Paths      map[string]httpPathItem `json:"paths"`
 	Components struct {
 		Schemas         map[string]httpSchema      `json:"schemas"`
@@ -37,10 +38,26 @@ type httpAPIDocument struct {
 
 type httpPathItem map[string]httpOperation
 
+type httpServer struct {
+	URL         string `json:"url"`
+	Description string `json:"description"`
+}
+
 type httpOperation struct {
 	OperationID string                     `json:"operationId"`
 	Responses   map[string]json.RawMessage `json:"responses"`
 	Security    []map[string][]string      `json:"security"`
+	Servers     []httpServer               `json:"servers"`
+}
+
+func TestHTTPAPIDeclaresCanonicalV1BeforeLegacyCompatibilityBase(t *testing.T) {
+	servers := readHTTPAPIDocument(t).Servers
+	if len(servers) != 2 || !strings.HasSuffix(servers[0].URL, httpapi.APIV1Prefix) {
+		t.Fatalf("API servers = %+v", servers)
+	}
+	if !strings.Contains(strings.ToLower(servers[1].Description), "deprecated") {
+		t.Fatalf("legacy server has no deprecation description: %+v", servers[1])
+	}
 }
 
 type httpSchema struct {
@@ -179,12 +196,21 @@ func TestDocumentedHTTPOperationsAreRouted(t *testing.T) {
 	replacer := strings.NewReplacer("{productID}", "product-1", "{orderID}", "order-1")
 
 	for path, pathItem := range document.Paths {
-		for method := range pathItem {
+		for method, operation := range pathItem {
 			request := httptest.NewRequest(strings.ToUpper(method), replacer.Replace(path), nil)
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
 			if response.Code == http.StatusNotFound || response.Code == http.StatusMethodNotAllowed {
 				t.Errorf("documented operation %s %s is not routed; status=%d", method, path, response.Code)
+			}
+			if len(operation.Servers) == 0 {
+				versionedPath := httpapi.APIV1Prefix + replacer.Replace(path)
+				versionedRequest := httptest.NewRequest(strings.ToUpper(method), versionedPath, nil)
+				versionedResponse := httptest.NewRecorder()
+				router.ServeHTTP(versionedResponse, versionedRequest)
+				if versionedResponse.Code == http.StatusNotFound || versionedResponse.Code == http.StatusMethodNotAllowed {
+					t.Errorf("canonical v1 operation %s %s is not routed; status=%d", method, versionedPath, versionedResponse.Code)
+				}
 			}
 		}
 	}

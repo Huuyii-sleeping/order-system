@@ -19,7 +19,7 @@ go run ./cmd/api
 发送一个大于 1 MiB 且 Content-Type 正确的订单请求：
 
 ```bash
-python3 - <<'PY' | curl -i http://127.0.0.1:8080/orders \
+python3 - <<'PY' | curl -i http://127.0.0.1:8080/api/v1/orders \
   -H 'Authorization: Bearer <valid-access-token>' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: boundary-test' \

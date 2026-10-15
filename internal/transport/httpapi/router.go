@@ -84,6 +84,7 @@ type RouterConfig struct {
 	NotificationWebhooks        NotificationWebhookUseCases
 	NotificationWebhookSecurity NotificationWebhookSecurity
 	NotificationWebhookMetrics  NotificationWebhookMetrics
+	APILifecycleMetrics         APILifecycleMetrics
 	Logger                      *slog.Logger
 	Authorization               PermissionAuthorizer
 	Audit                       interface {
@@ -142,55 +143,63 @@ func NewRouterWithConfig(
 	}
 
 	catalogHandler := newCatalogHandler(catalogQueries)
-	mux.HandleFunc("GET /products", catalogHandler.list)
-	mux.HandleFunc("GET /products/{productID}", catalogHandler.getByID)
-
 	security := config.AuthSecurity
 	authHandler := newAuthHandler(authUseCases, security.SecureCookies)
-	mux.HandleFunc("POST /auth/register", authHandler.register)
-	mux.Handle("POST /auth/login", WithRateLimit(
-		security.LoginLimiter, http.HandlerFunc(authHandler.login),
-	))
-	mux.Handle("POST /auth/refresh", WithRateLimit(
-		security.RefreshLimiter, http.HandlerFunc(authHandler.refresh),
-	))
-	mux.Handle("POST /auth/logout", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logout)))
-	mux.Handle("POST /auth/logout-all", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logoutAll)))
-
 	orderHandler := newOrderHandler(orderUseCases)
-	mux.Handle("POST /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.create)))
-	mux.Handle("GET /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.list)))
-	mux.Handle("GET /orders/{orderID}", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.getByID)))
-	if config.PaymentQueries != nil {
-		paymentHandler := newPaymentHandler(config.PaymentQueries)
-		mux.Handle(
-			"GET /orders/{orderID}/payment",
-			WithAuthentication(authUseCases, http.HandlerFunc(paymentHandler.getByOrderID)),
-		)
-	}
-	if config.NotificationQueries != nil {
-		notificationHandler := newNotificationHandler(config.NotificationQueries)
-		mux.Handle(
-			"GET /orders/{orderID}/notification",
-			WithAuthentication(authUseCases, http.HandlerFunc(notificationHandler.getByOrderID)),
-		)
-	}
-	if config.NotificationWebhooks != nil && strings.TrimSpace(config.NotificationWebhookSecurity.Secret) != "" {
-		webhookHandler := newNotificationWebhookHandler(
-			config.NotificationWebhooks, config.NotificationWebhookSecurity, config.NotificationWebhookMetrics,
-		)
-		mux.HandleFunc("POST /webhooks/notifications/provider", webhookHandler.receive)
-	}
-	if administrativeAuth, ok := authUseCases.(AdministrativeAuth); ok &&
-		config.Authorization != nil && config.Audit != nil {
-		handler := auditHandler{queries: config.Audit}
-		mux.Handle("GET /admin/audit-events", WithPermission(
-			administrativeAuth, config.Authorization, config.Audit,
-			authorization.PermissionAuditRead,
-			"audit.events.list", "audit_log", "audit_events",
-			http.HandlerFunc(handler.list),
+
+	registerAPI := func(routes apiRouteSet) {
+		routes.HandleFunc("GET /products", catalogHandler.list)
+		routes.HandleFunc("GET /products/{productID}", catalogHandler.getByID)
+		routes.HandleFunc("POST /auth/register", authHandler.register)
+		routes.Handle("POST /auth/login", WithRateLimit(
+			security.LoginLimiter, http.HandlerFunc(authHandler.login),
 		))
+		routes.Handle("POST /auth/refresh", WithRateLimit(
+			security.RefreshLimiter, http.HandlerFunc(authHandler.refresh),
+		))
+		routes.Handle("POST /auth/logout", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logout)))
+		routes.Handle("POST /auth/logout-all", WithAuthentication(authUseCases, http.HandlerFunc(authHandler.logoutAll)))
+		routes.Handle("POST /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.create)))
+		routes.Handle("GET /orders", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.list)))
+		routes.Handle("GET /orders/{orderID}", WithAuthentication(authUseCases, http.HandlerFunc(orderHandler.getByID)))
+		if config.PaymentQueries != nil {
+			paymentHandler := newPaymentHandler(config.PaymentQueries)
+			routes.Handle(
+				"GET /orders/{orderID}/payment",
+				WithAuthentication(authUseCases, http.HandlerFunc(paymentHandler.getByOrderID)),
+			)
+		}
+		if config.NotificationQueries != nil {
+			notificationHandler := newNotificationHandler(config.NotificationQueries)
+			routes.Handle(
+				"GET /orders/{orderID}/notification",
+				WithAuthentication(authUseCases, http.HandlerFunc(notificationHandler.getByOrderID)),
+			)
+		}
+		if config.NotificationWebhooks != nil && strings.TrimSpace(config.NotificationWebhookSecurity.Secret) != "" {
+			webhookHandler := newNotificationWebhookHandler(
+				config.NotificationWebhooks, config.NotificationWebhookSecurity, config.NotificationWebhookMetrics,
+			)
+			routes.HandleFunc("POST /webhooks/notifications/provider", webhookHandler.receive)
+		}
+		if administrativeAuth, ok := authUseCases.(AdministrativeAuth); ok &&
+			config.Authorization != nil && config.Audit != nil {
+			handler := auditHandler{queries: config.Audit}
+			routes.Handle("GET /admin/audit-events", WithPermission(
+				administrativeAuth, config.Authorization, config.Audit,
+				authorization.PermissionAuditRead,
+				"audit.events.list", "audit_log", "audit_events",
+				http.HandlerFunc(handler.list),
+			))
+		}
 	}
+	registerAPI(apiRouteSet{
+		mux: mux, entrypoint: apiLegacyAccess, metrics: config.APILifecycleMetrics,
+	})
+	registerAPI(apiRouteSet{
+		mux: mux, prefix: APIV1Prefix, entrypoint: apiVersionedAccess,
+		metrics: config.APILifecycleMetrics,
+	})
 
 	// 返回原始路由器。
 	//

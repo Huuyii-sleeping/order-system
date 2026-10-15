@@ -36,3 +36,4 @@
 - [`0036-database-query-plans-and-n-plus-one.md`](0036-database-query-plans-and-n-plus-one.md)：用真实 PostgreSQL 执行计划回归保护订单列表索引，并建立 N+1 排查边界。
 - [`0037-controlled-message-recovery.md`](0037-controlled-message-recovery.md)：用状态校验、租约保护、稳定消息身份和恢复记录控制 Outbox/Inbox/DLQ 人工修复。
 - [`0038-rbac-and-audit-events.md`](0038-rbac-and-audit-events.md)：分离认证与授权，用角色/权限策略和 fail-closed 持久化审计保护管理操作。
+- [`0039-api-version-lifecycle.md`](0039-api-version-lifecycle.md)：用 `/api/v1`、兼容入口、标准弃用 Header 和迁移指标安全演进 HTTP 契约。

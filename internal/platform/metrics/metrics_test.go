@@ -15,6 +15,8 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 	registry := platformmetrics.NewRegistry()
 	registry.RequestStarted()
 	registry.RequestFinished(http.MethodGet, "/orders/{orderID}", http.StatusOK, 25*time.Millisecond)
+	registry.RecordAPIAccess("v1", "legacy")
+	registry.RecordAPIAccess("v1", "versioned")
 	registry.RecordProcessingAttempt("payments-v1", "orders.created.v1", "success")
 	registry.RecordProcessingAttempt("payments-v1", "orders.created.v1", "failure")
 	registry.RecordRetry("payments-v1", "orders.created.v1", "handler")
@@ -49,6 +51,8 @@ func TestRegistryExportsHTTPAndRuntimeMetrics(t *testing.T) {
 		`order_system_http_requests_total{method="GET",route="/orders/{orderID}",status="200"} 1`,
 		`order_system_http_request_duration_seconds_count{method="GET",route="/orders/{orderID}"} 1`,
 		`order_system_http_requests_in_flight 0`,
+		`order_system_http_api_access_total{entrypoint="legacy",version="v1"} 1`,
+		`order_system_http_api_access_total{entrypoint="versioned",version="v1"} 1`,
 		`order_system_kafka_processing_attempts_total{consumer_group="payments-v1",outcome="success",topic="orders.created.v1"} 1`,
 		`order_system_kafka_processing_attempts_total{consumer_group="payments-v1",outcome="failure",topic="orders.created.v1"} 1`,
 		`order_system_kafka_retries_total{consumer_group="payments-v1",reason="handler",topic="orders.created.v1"} 1`,

@@ -35,7 +35,7 @@ go run ./cmd/api
 注册、登录并创建订单后，等待 Payment Worker 处理，再查询支付状态与指标：
 
 ```bash
-curl -s http://127.0.0.1:8080/orders/<order-id>/payment \
+curl -s http://127.0.0.1:8080/api/v1/orders/<order-id>/payment \
   -H 'Authorization: Bearer <access-token>'
 curl -s http://127.0.0.1:8080/metrics | grep order_system_payment_provider
 ```

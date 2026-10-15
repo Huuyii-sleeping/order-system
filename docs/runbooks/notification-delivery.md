@@ -41,7 +41,7 @@ Provider 请求格式：
     WEBHOOK_TIMESTAMP=$(date +%s)
     WEBHOOK_BODY='{"event_id":"provider-event-1","notification_id":"notification-1","idempotency_key":"notification-1","status":"succeeded","provider_reference":"provider-reference-1"}'
     WEBHOOK_SIGNATURE=$(printf '%s' "${WEBHOOK_TIMESTAMP}.${WEBHOOK_BODY}" | openssl dgst -sha256 -hmac "${WEBHOOK_SECRET}" -hex | awk '{print $NF}')
-    curl -i -X POST http://127.0.0.1:8080/webhooks/notifications/provider \
+    curl -i -X POST http://127.0.0.1:8080/api/v1/webhooks/notifications/provider \
       -H 'Content-Type: application/json' \
       -H "X-Webhook-Timestamp: ${WEBHOOK_TIMESTAMP}" \
       -H "X-Webhook-Signature: ${WEBHOOK_SIGNATURE}" \

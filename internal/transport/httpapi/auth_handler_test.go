@@ -188,6 +188,32 @@ func TestLoginCanSetSecureAuthCookies(t *testing.T) {
 	}
 }
 
+func TestVersionedLoginScopesRefreshCookieToVersionedAuthPath(t *testing.T) {
+	user := mustHTTPUser(t)
+	expiresAt := time.Now().Add(time.Hour)
+	auth := &authUseCasesStub{loginResult: authapp.LoginResult{
+		User: user, AccessToken: "access", AccessExpiresAt: expiresAt,
+		RefreshToken: "refresh", RefreshExpiresAt: expiresAt,
+	}}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/auth/login",
+		bytes.NewBufferString(`{"email":"learner@example.com","password":"correct-horse"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	httpapi.NewRouter(catalogQueriesStub{}, auth, nil).ServeHTTP(response, request)
+
+	cookies := response.Result().Cookies()
+	if response.Code != http.StatusOK || len(cookies) != 2 {
+		t.Fatalf("versioned login = status %d cookies %+v", response.Code, cookies)
+	}
+	if got := cookies[0].Path; got != "/api/v1/auth" {
+		t.Fatalf("versioned refresh cookie path = %q", got)
+	}
+}
+
 func TestRefreshRotatesCookieAndReturnsOnlyAccessToken(t *testing.T) {
 	expiresAt := time.Date(2026, 9, 29, 8, 0, 0, 0, time.UTC)
 	auth := &authUseCasesStub{refreshResult: authapp.RefreshResult{
